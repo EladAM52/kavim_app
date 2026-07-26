@@ -1,0 +1,116 @@
+import js from '@eslint/js';
+import reactHooks from 'eslint-plugin-react-hooks';
+import reactRefresh from 'eslint-plugin-react-refresh';
+import globals from 'globals';
+import tseslint from 'typescript-eslint';
+
+// ── RTL enforcement ────────────────────────────────────────────────────────
+// Hebrew is the primary language, so a physical CSS property is a layout bug
+// waiting to happen — it will not mirror. These selectors catch the Tailwind
+// utilities that break RTL, in className strings and in clsx/cn calls.
+// See CLAUDE.md rule 1 and SPEC §10.3.
+// The trailing (?![a-z]) matters: without it, `rounded-l` matches inside
+// `rounded-lg` and `border-l` inside `border-l-4`-adjacent names, which floods
+// the codebase with false positives and gets the rule switched off.
+const PHYSICAL_UTILITY_PATTERN = String.raw`(^|[\s'"\`:])(p[lr]-|m[lr]-|-m[lr]-|left-|right-|text-left|text-right|float-left|float-right|(border|rounded|inset)-[lr](?![a-z]))`;
+
+const RTL_MESSAGE =
+  'Physical CSS utility breaks RTL. Use the logical equivalent: ps-/pe-, ms-/me-, ' +
+  'start-/end-, text-start/text-end, border-s/border-e, rounded-s/rounded-e.';
+
+export default tseslint.config(
+  { ignores: ['dist', 'coverage', 'src/api/generated'] },
+
+  js.configs.recommended,
+  ...tseslint.configs.strictTypeChecked,
+  ...tseslint.configs.stylisticTypeChecked,
+
+  {
+    files: ['**/*.{ts,tsx}'],
+    languageOptions: {
+      ecmaVersion: 2022,
+      globals: globals.browser,
+      parserOptions: {
+        // Resolves each file against whichever project actually includes it,
+        // so app code and vite.config.ts are both typed correctly.
+        projectService: true,
+        tsconfigRootDir: import.meta.dirname,
+      },
+    },
+    plugins: {
+      'react-hooks': reactHooks,
+      'react-refresh': reactRefresh,
+    },
+    rules: {
+      ...reactHooks.configs.recommended.rules,
+      'react-refresh/only-export-components': ['warn', { allowConstantExport: true }],
+
+      // ── RTL (CLAUDE.md rule 1) ─────────────────────────────────────────
+      'no-restricted-syntax': [
+        'error',
+        {
+          selector: `JSXAttribute[name.name=/^(className|class)$/] Literal[value=/${PHYSICAL_UTILITY_PATTERN}/]`,
+          message: RTL_MESSAGE,
+        },
+        {
+          selector: `JSXAttribute[name.name=/^(className|class)$/] TemplateElement[value.raw=/${PHYSICAL_UTILITY_PATTERN}/]`,
+          message: RTL_MESSAGE,
+        },
+        {
+          selector: `CallExpression[callee.name=/^(clsx|cn|classNames|twMerge)$/] Literal[value=/${PHYSICAL_UTILITY_PATTERN}/]`,
+          message: RTL_MESSAGE,
+        },
+      ],
+
+      // ── XSS (SPEC §8.3) ────────────────────────────────────────────────
+      'no-restricted-properties': [
+        'error',
+        {
+          property: 'dangerouslySetInnerHTML',
+          message:
+            'Banned. Comment bodies are sanitized Markdown rendered through the ' +
+            'Markdown component; raw HTML injection is not permitted.',
+        },
+      ],
+
+      // ── i18n: no user-facing string literals outside locales/ ──────────
+      // Enforced by review in Phase 0; a custom rule lands with the first
+      // feature screens in Phase 3.
+
+      '@typescript-eslint/no-unused-vars': [
+        'error',
+        { argsIgnorePattern: '^_', varsIgnorePattern: '^_' },
+      ],
+      '@typescript-eslint/consistent-type-imports': [
+        'error',
+        { prefer: 'type-imports', fixStyle: 'inline-type-imports' },
+      ],
+      '@typescript-eslint/restrict-template-expressions': [
+        'error',
+        { allowNumber: true, allowBoolean: false },
+      ],
+    },
+  },
+
+  {
+    files: ['**/*.test.{ts,tsx}', 'src/test/**'],
+    rules: {
+      '@typescript-eslint/no-non-null-assertion': 'off',
+      '@typescript-eslint/no-unsafe-assignment': 'off',
+    },
+  },
+
+  {
+    files: ['vite.config.ts'],
+    languageOptions: { globals: globals.node },
+    rules: { '@typescript-eslint/no-unsafe-assignment': 'off' },
+  },
+
+  {
+    // This file is not part of any tsconfig, so type-aware rules cannot run on
+    // it. Linting it without them still catches syntax and unused imports.
+    files: ['eslint.config.js', '*.config.js'],
+    extends: [tseslint.configs.disableTypeChecked],
+    languageOptions: { globals: globals.node },
+  },
+);

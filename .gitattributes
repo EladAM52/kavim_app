@@ -1,0 +1,43 @@
+# Normalize line endings to LF in the repository and on checkout.
+#
+# Not cosmetic: a shell script checked out with CRLF fails inside a Linux
+# container with "bad interpreter: /bin/sh^M", and Dockerfile RUN lines break
+# the same way. Matches end_of_line = lf in .editorconfig.
+
+* text=auto eol=lf
+
+# Explicitly LF — these run inside containers.
+*.sh            text eol=lf
+Dockerfile      text eol=lf
+*.Dockerfile    text eol=lf
+*.yml           text eol=lf
+*.yaml          text eol=lf
+*.sql           text eol=lf
+*.py            text eol=lf
+*.ts            text eol=lf
+*.tsx           text eol=lf
+*.js            text eol=lf
+*.json          text eol=lf
+*.css           text eol=lf
+*.html          text eol=lf
+*.md            text eol=lf
+*.toml          text eol=lf
+
+# Windows-only helpers, if any are added later.
+*.bat           text eol=crlf
+*.ps1           text eol=crlf
+
+# Binary — never touch.
+*.png           binary
+*.jpg           binary
+*.jpeg          binary
+*.webp          binary
+*.ico           binary
+*.woff          binary
+*.woff2         binary
+*.pdf           binary
+
+# Generated / vendored: keep out of diffs and language stats.
+frontend/package-lock.json      -diff linguist-generated
+backend/uv.lock                 -diff linguist-generated
+frontend/src/api/generated/**   linguist-generated

@@ -1,0 +1,29 @@
+# Secret scanning config (SPEC NFR-12).
+# Extends the default ruleset rather than replacing it.
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Files that legitimately contain secret-shaped placeholders"
+
+paths = [
+  '''\.env\.example$''',
+  '''docs/SPEC\.md$''',
+  '''\.gitleaks\.toml$''',
+  '''package-lock\.json$''',
+  '''uv\.lock$''',
+]
+
+regexes = [
+  # Documented placeholders, not credentials.
+  '''CHANGE_ME_generate_a_long_random_value''',
+  '''kavim_dev_password''',
+  '''kavim_test''',
+  '''ci_test_secret_key_not_used_in_production_padding''',
+  # Illustrative provider key/id shapes in documentation.
+  '''SG\.…''',
+  '''AC…''',
+  '''d-…''',
+  '''d-xxxxxxxx''',
+]

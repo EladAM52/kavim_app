@@ -1,0 +1,16 @@
+{
+  "generic": "Something went wrong. Please try again.",
+  "network": "Cannot reach the server. Check your network connection.",
+  "timeout": "The request took too long. Please try again.",
+  "unauthenticated": "Please sign in again.",
+  "permission_denied": "You do not have permission to do that.",
+  "account_locked": "This account is temporarily locked after failed sign-in attempts. Try again in {{minutes}} minutes.",
+  "not_found": "That item could not be found.",
+  "conflict": "That action conflicts with the current state.",
+  "version_conflict": "This item was changed by someone else since you loaded it.",
+  "gone": "This invitation has expired or was already used. Ask your manager for a new one.",
+  "validation_failed": "Some fields are not valid.",
+  "rate_limited": "Too many requests. Try again in {{seconds}} seconds.",
+  "service_unavailable": "The service is temporarily unavailable. Try again shortly.",
+  "provider_error": "An external service is unavailable. This will be retried automatically."
+}

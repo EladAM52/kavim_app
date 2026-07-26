@@ -1,0 +1,54 @@
+{
+  "app": {
+    "name": "קווים",
+    "tagline": "ניהול סקרי איכות בקו הייצור"
+  },
+  "nav": {
+    "myTasks": "המשימות שלי",
+    "projects": "פרויקטים",
+    "notifications": "התראות",
+    "admin": "ניהול",
+    "more": "עוד",
+    "skipToContent": "דלג לתוכן הראשי"
+  },
+  "actions": {
+    "save": "שמירה",
+    "cancel": "ביטול",
+    "delete": "מחיקה",
+    "edit": "עריכה",
+    "add": "הוספה",
+    "close": "סגירה",
+    "retry": "נסה שוב",
+    "search": "חיפוש",
+    "confirm": "אישור"
+  },
+  "language": {
+    "label": "שפה",
+    "hebrew": "עברית",
+    "english": "English",
+    "switchTo": "החלפה ל{{language}}"
+  },
+  "state": {
+    "loading": "טוען…",
+    "empty": "אין נתונים להצגה",
+    "offline": "אין חיבור לרשת",
+    "saving": "שומר…",
+    "saved": "נשמר"
+  },
+  "system": {
+    "title": "מצב המערכת",
+    "subtitle": "שלב 0 — בסיס המערכת",
+    "api": "שרת ה־API",
+    "database": "מסד נתונים",
+    "cache": "מטמון (Redis)",
+    "version": "גרסה",
+    "environment": "סביבה",
+    "locale": "שפת ברירת מחדל",
+    "timezone": "אזור זמן",
+    "direction": "כיוון טקסט",
+    "checking": "בבדיקה…",
+    "ok": "תקין",
+    "unreachable": "לא זמין",
+    "unreachableHint": "ודא שהשירותים פועלים: docker compose up -d db redis"
+  }
+}

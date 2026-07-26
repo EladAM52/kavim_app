@@ -1,0 +1,54 @@
+{
+  "app": {
+    "name": "Kavim",
+    "tagline": "Production line quality review management"
+  },
+  "nav": {
+    "myTasks": "My tasks",
+    "projects": "Projects",
+    "notifications": "Notifications",
+    "admin": "Admin",
+    "more": "More",
+    "skipToContent": "Skip to main content"
+  },
+  "actions": {
+    "save": "Save",
+    "cancel": "Cancel",
+    "delete": "Delete",
+    "edit": "Edit",
+    "add": "Add",
+    "close": "Close",
+    "retry": "Retry",
+    "search": "Search",
+    "confirm": "Confirm"
+  },
+  "language": {
+    "label": "Language",
+    "hebrew": "עברית",
+    "english": "English",
+    "switchTo": "Switch to {{language}}"
+  },
+  "state": {
+    "loading": "Loading…",
+    "empty": "Nothing to show",
+    "offline": "No network connection",
+    "saving": "Saving…",
+    "saved": "Saved"
+  },
+  "system": {
+    "title": "System status",
+    "subtitle": "Phase 0 — foundation",
+    "api": "API server",
+    "database": "Database",
+    "cache": "Cache (Redis)",
+    "version": "Version",
+    "environment": "Environment",
+    "locale": "Default locale",
+    "timezone": "Time zone",
+    "direction": "Text direction",
+    "checking": "Checking…",
+    "ok": "OK",
+    "unreachable": "Unreachable",
+    "unreachableHint": "Make sure the services are running: docker compose up -d db redis"
+  }
+}

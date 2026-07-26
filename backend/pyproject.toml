@@ -1,0 +1,142 @@
+[project]
+name = "kavim"
+version = "0.1.0"
+description = "Kavim — production line quality review and task management"
+requires-python = ">=3.12,<3.13"
+readme = "README.md"
+
+dependencies = [
+    # ── web ───────────────────────────────────────────────────────────────
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "python-multipart>=0.0.12",
+    # ── data ──────────────────────────────────────────────────────────────
+    "sqlalchemy[asyncio]>=2.0.36",
+    "asyncpg>=0.30",
+    "alembic>=1.14",
+    # ── config / validation ───────────────────────────────────────────────
+    "pydantic>=2.10",
+    "pydantic-settings>=2.7",
+    "email-validator>=2.2",
+    # ── cache / queue ─────────────────────────────────────────────────────
+    "redis>=5.2",
+    "celery[redis]>=5.4",
+    # ── security ──────────────────────────────────────────────────────────
+    "argon2-cffi>=23.1",
+    "pyjwt>=2.10",
+    # ── observability ─────────────────────────────────────────────────────
+    "structlog>=24.4",
+    # ── integrations (SPEC §6.14 — imported only from app/integrations/) ──
+    "sendgrid>=6.11",
+    "twilio>=9.4",
+    "boto3>=1.35",
+    # ── media / export ────────────────────────────────────────────────────
+    "pillow>=11.0",
+    "openpyxl>=3.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "pytest-cov>=6.0",
+    "httpx>=0.28",
+    "testcontainers[postgres]>=4.9",
+    "factory-boy>=3.3",
+    "ruff>=0.8",
+    "mypy>=1.13",
+    "import-linter>=2.1",
+    "types-boto3",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]
+
+# ══════════════════════════════════════════════════════════════════════════
+#  ruff — lint + format
+# ══════════════════════════════════════════════════════════════════════════
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = ["alembic/versions"]
+
+[tool.ruff.lint]
+select = [
+    "E", "W",    # pycodestyle
+    "F",         # pyflakes
+    "I",         # isort
+    "N",         # pep8-naming
+    "UP",        # pyupgrade
+    "B",         # bugbear
+    "C4",        # comprehensions
+    "DTZ",       # timezone-aware datetimes  ← enforces SPEC NFR-08
+    "T20",       # no print()
+    "SIM",       # simplify
+    "RUF",       # ruff-specific
+    "ASYNC",     # async pitfalls
+    "S",         # bandit security
+]
+ignore = [
+    "B008",      # FastAPI Depends() in defaults is the documented idiom
+    "S101",      # assert is fine in tests
+    # Typographic dashes and Hebrew text in comments/docstrings are deliberate.
+    "RUF001", "RUF002", "RUF003",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S", "T20"]
+"alembic/**" = ["I001"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["app"]
+
+# ══════════════════════════════════════════════════════════════════════════
+#  mypy
+# ══════════════════════════════════════════════════════════════════════════
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_unreachable = true
+plugins = ["pydantic.mypy"]
+exclude = ["alembic/versions/"]
+
+[[tool.mypy.overrides]]
+module = ["celery.*", "sendgrid.*", "twilio.*", "testcontainers.*", "factory.*"]
+ignore_missing_imports = true
+
+# Celery's signal and task decorators are untyped, so strict mode flags every
+# decorated function. The functions themselves are annotated.
+[[tool.mypy.overrides]]
+module = ["app.workers.*"]
+disallow_untyped_decorators = false
+
+# ══════════════════════════════════════════════════════════════════════════
+#  pytest
+# ══════════════════════════════════════════════════════════════════════════
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+addopts = "-q --strict-markers --strict-config"
+markers = [
+    "integration: requires a real PostgreSQL container",
+    "slow: takes more than a second",
+]
+filterwarnings = ["error::DeprecationWarning"]
+
+[tool.coverage.run]
+source = ["app"]
+omit = ["app/workers/beat_schedule.py", "*/__init__.py"]
+
+[tool.coverage.report]
+fail_under = 80
+show_missing = true
+exclude_also = [
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "@abstractmethod",
+]

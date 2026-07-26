@@ -1,0 +1,142 @@
+# ══════════════════════════════════════════════════════════════════════════
+#  Kavim — development stack
+#
+#  Recommended loop on Windows (fastest):
+#    docker compose -f infra/docker-compose.yml up -d db redis
+#    then run uvicorn and vite on the host.
+#
+#  Full stack in containers:
+#    docker compose -f infra/docker-compose.yml --profile app --profile frontend up
+#
+#  Bind mounts on Windows are slow, which is why app processes default to the
+#  host and the containerised ones sit behind the "app" profile.
+# ══════════════════════════════════════════════════════════════════════════
+name: kavim
+
+x-backend-base: &backend-base
+  build:
+    context: ..
+    dockerfile: backend/Dockerfile
+  image: kavim-backend:dev
+  env_file: ../.env
+  environment:
+    # Override host-oriented values from .env with in-network service names.
+    DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-kavim}:${POSTGRES_PASSWORD:-kavim_dev_password}@db:5432/${POSTGRES_DB:-kavim}
+    REDIS_URL: redis://redis:6379/0
+    CELERY_BROKER_URL: redis://redis:6379/1
+    CELERY_RESULT_BACKEND: redis://redis:6379/2
+  volumes:
+    - ../backend:/app
+    - backend_storage:/app/.storage
+  depends_on:
+    db:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+  restart: unless-stopped
+
+services:
+  # ── PostgreSQL 16 ───────────────────────────────────────────────────────
+  db:
+    image: postgres:16-alpine
+    container_name: kavim-db
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-kavim}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-kavim_dev_password}
+      POSTGRES_DB: ${POSTGRES_DB:-kavim}
+      # Deterministic collation so ORDER BY matches across machines.
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-kavim} -d ${POSTGRES_DB:-kavim}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    restart: unless-stopped
+
+  # ── Redis 7 ─────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: kavim-redis
+    command: >
+      redis-server
+      --appendonly yes
+      --maxmemory 512mb
+      --maxmemory-policy allkeys-lru
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    restart: unless-stopped
+
+  # ── FastAPI (profile: app) ──────────────────────────────────────────────
+  backend:
+    <<: *backend-base
+    container_name: kavim-backend
+    profiles: ["app"]
+    command: >
+      uvicorn app.main:app
+      --host 0.0.0.0 --port 8000
+      --reload --reload-dir /app/app
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health/live', timeout=3).status==200 else 1)"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+
+  # ── Celery worker (profile: app) ────────────────────────────────────────
+  worker:
+    <<: *backend-base
+    container_name: kavim-worker
+    profiles: ["app"]
+    command: celery -A app.workers.celery_app.celery_app worker --loglevel=info --concurrency=2
+
+  # ── Celery beat — MUST remain a single replica ──────────────────────────
+  # Two beat instances double-send every scheduled notification.
+  beat:
+    <<: *backend-base
+    container_name: kavim-beat
+    profiles: ["app"]
+    command: celery -A app.workers.celery_app.celery_app beat --loglevel=info
+    deploy:
+      replicas: 1
+
+  # ── Vite dev server (profile: frontend) ─────────────────────────────────
+  frontend:
+    build:
+      context: ..
+      dockerfile: frontend/Dockerfile
+      target: dev
+    image: kavim-frontend:dev
+    container_name: kavim-frontend
+    profiles: ["frontend"]
+    environment:
+      VITE_API_BASE_URL: /api/v1
+      VITE_API_PROXY_TARGET: http://backend:8000
+      VITE_WS_URL: ws://localhost:8000/ws
+    ports:
+      - "5173:5173"
+    volumes:
+      - ../frontend:/app
+      - frontend_node_modules:/app/node_modules
+    command: npm run dev -- --host 0.0.0.0
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  redisdata:
+  backend_storage:
+  frontend_node_modules:

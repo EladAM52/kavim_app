@@ -1,0 +1,108 @@
+@import 'tailwindcss';
+
+/* ═══════════════════════════════════════════════════════════════════════
+   Design tokens (Tailwind v4 is CSS-first — this replaces tailwind.config.js)
+   ═══════════════════════════════════════════════════════════════════════ */
+@theme {
+  /* Brand — teal reads as "inspection/quality" without the alarm of red,
+     and stays distinguishable from the status palette below. */
+  --color-brand-50: #f0fdfa;
+  --color-brand-100: #ccfbf1;
+  --color-brand-200: #99f6e4;
+  --color-brand-300: #5eead4;
+  --color-brand-400: #2dd4bf;
+  --color-brand-500: #14b8a6;
+  --color-brand-600: #0d9488;
+  --color-brand-700: #0f766e;
+  --color-brand-800: #115e59;
+  --color-brand-900: #134e4a;
+
+  /* Status colours for board cells. Deliberately distinguishable for the
+     ~8% of men with red/green colour vision deficiency — every status also
+     carries a text label, never colour alone (SPEC NFR-05). */
+  --color-status-open: #94a3b8;
+  --color-status-progress: #3b82f6;
+  --color-status-review: #a855f7;
+  --color-status-blocked: #ef4444;
+  --color-status-done: #22c55e;
+  --color-status-overdue: #f97316;
+
+  /* Fonts. Heebo covers Hebrew; Inter covers Latin. Both are self-hosted in
+     Phase 8 — until then the system stack keeps first paint fast. */
+  --font-sans:
+    'Heebo', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  --font-mono: ui-monospace, 'Cascadia Code', 'Source Code Pro', monospace;
+
+  /* Breakpoints — the <768px boundary is where the board grid is replaced by
+     the card list, not merely narrowed (SPEC §10.4). */
+  --breakpoint-sm: 640px;
+  --breakpoint-md: 768px;
+  --breakpoint-lg: 1024px;
+  --breakpoint-xl: 1280px;
+  --breakpoint-2xl: 1536px;
+
+  /* Minimum touch target — workers wear gloves (SPEC NFR-06). */
+  --spacing-touch: 2.75rem; /* 44px */
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   Base
+   ═══════════════════════════════════════════════════════════════════════ */
+@layer base {
+  :root {
+    color-scheme: light;
+    --app-header-height: 3.5rem;
+    --app-bottom-nav-height: 3.75rem;
+  }
+
+  html {
+    -webkit-text-size-adjust: 100%;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  body {
+    @apply bg-slate-50 text-slate-900 antialiased;
+    font-family: var(--font-sans);
+    /* Respect the notch / home indicator on phones. */
+    padding-inline: env(safe-area-inset-left) env(safe-area-inset-right);
+  }
+
+  /* Visible focus is required, not optional (SPEC NFR-05). */
+  :focus-visible {
+    @apply outline-brand-600 outline-2 outline-offset-2;
+  }
+
+  /* Numbers, dates, phone numbers, and IDs stay LTR inside RTL text.
+     Without this, "12/07" renders as "07/12" to a Hebrew reader. */
+  [dir='rtl'] .ltr-embed,
+  .ltr-embed {
+    direction: ltr;
+    unicode-bidi: isolate;
+  }
+
+  /* Directional icons mirror; non-directional ones (search, calendar, trash)
+     must not. Opt in explicitly rather than mirroring everything. */
+  [dir='rtl'] .rtl-mirror {
+    transform: scaleX(-1);
+  }
+
+  /* Honour the OS "reduce motion" setting. */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+}
+
+@layer utilities {
+  /* Guarantees the 44px minimum in one class. */
+  .touch-target {
+    min-inline-size: var(--spacing-touch);
+    min-block-size: var(--spacing-touch);
+  }
+}

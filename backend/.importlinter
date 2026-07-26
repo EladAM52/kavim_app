@@ -1,0 +1,67 @@
+; Module boundary rules (SPEC §5.1, CLAUDE.md rule 3).
+; Run: uv run lint-imports
+;
+; These make the modular monolith real. Without mechanical enforcement the
+; boundaries decay within weeks; with them, any module stays extractable into
+; its own service later without rewriting call sites.
+;
+; PHASE NOTE: the "no cross-module router imports" contract is added in Phase 2,
+; once the first routers exist — import-linter errors on modules that are not
+; yet present.
+
+[importlinter]
+root_package = app
+include_external_packages = True
+
+; ── layering ──────────────────────────────────────────────────────────────
+; Each layer may import the ones below it, never the ones above.
+[importlinter:contract:layers]
+name = Layered architecture
+type = layers
+layers =
+    app.workers
+    app.modules
+    app.schemas
+    app.models
+    app.integrations
+    app.core
+
+; ── core is the substrate and depends on nothing above it ─────────────────
+[importlinter:contract:core-independence]
+name = core must not import modules, schemas, integrations, or workers
+type = forbidden
+source_modules =
+    app.core
+forbidden_modules =
+    app.modules
+    app.schemas
+    app.integrations
+    app.workers
+
+; ── integrations wrap external SDKs and stay leaf-level ───────────────────
+[importlinter:contract:integrations-independence]
+name = integrations must not import application modules
+type = forbidden
+source_modules =
+    app.integrations
+forbidden_modules =
+    app.modules
+    app.models
+    app.schemas
+    app.workers
+
+; ── external provider SDKs appear ONLY in integrations ────────────────────
+; Keeps the app portable (SPEC NFR-20) and gives tests one place to stub.
+[importlinter:contract:sdk-containment]
+name = provider SDKs only inside app.integrations
+type = forbidden
+source_modules =
+    app.core
+    app.models
+    app.schemas
+    app.modules
+    app.workers
+forbidden_modules =
+    sendgrid
+    twilio
+    boto3

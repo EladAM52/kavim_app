@@ -1,0 +1,22 @@
+<!doctype html>
+<!--
+  dir and lang are placeholders. main.tsx sets them from the resolved locale
+  before React mounts, so the very first paint is already in the correct
+  direction — no visible flip on load.
+-->
+<html lang="he" dir="rtl">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="theme-color" content="#0f766e" />
+    <meta name="description" content="Kavim — production line quality review and task management" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <!-- PNG app icons and the apple-touch-icon land with the PWA work in Phase 8. -->
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <title>Kavim</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

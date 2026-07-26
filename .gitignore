@@ -1,0 +1,58 @@
+# ── secrets ───────────────────────────────────────────────────────────────
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# ── python ────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+.hypothesis/
+
+# ── node ──────────────────────────────────────────────────────────────────
+node_modules/
+dist/
+dist-ssr/
+.vite/
+*.local
+playwright-report/
+test-results/
+.playwright/
+
+# ── generated ─────────────────────────────────────────────────────────────
+backend/app/static/
+frontend/src/api/generated/*.ts.bak
+
+# ── local storage (STORAGE_BACKEND=local) ─────────────────────────────────
+backend/.storage/
+
+# ── ide ───────────────────────────────────────────────────────────────────
+.idea/
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+*.swp
+*.swo
+
+# ── os ────────────────────────────────────────────────────────────────────
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+.DS_Store
+
+# ── logs / tmp ────────────────────────────────────────────────────────────
+*.log
+npm-debug.log*
+tmp/
+.tmp/
