@@ -46,7 +46,11 @@ kavim/                                      # repo root
 │   │   │   ├── config.py                   # pydantic-settings; every env var declared and typed
 │   │   │   ├── database.py                 # async engine, sessionmaker, get_db dependency
 │   │   │   ├── security.py                 # argon2id, JWT, token/OTP generation + hashing
-│   │   │   ├── permissions.py              # permission registry, require_permission dep, resolver
+│   │   │   ├── permissions.py              # permission registry, role matrix, resolver
+│   │   │   ├── enums.py                    # ALL shared enums — lives here, not in
+│   │   │   │                               # models/, because core.permissions needs
+│   │   │   │                               # RoleKey and core may not import models
+│   │   │   ├── time.py                     # utc_now, local_today, quiet-hours window
 │   │   │   ├── rate_limit.py               # Redis token bucket
 │   │   │   ├── redis.py                    # connection pool, cache helpers
 │   │   │   ├── exceptions.py               # error hierarchy + RFC 7807 handlers
@@ -55,8 +59,12 @@ kavim/                                      # repo root
 │   │   │   ├── pagination.py               # cursor pagination helpers
 │   │   │   └── middleware.py               # request-id, timing, CORS, security headers
 │   │   │
+│   │   ├── scripts/                        # python -m app.scripts.<name>
+│   │   │   └── seed.py                     # reference data + demo board. Lives here,
+│   │   │                                   # not infra/, because it imports the app
+│   │   │
 │   │   ├── models/                         # SQLAlchemy 2.0 ORM, one file per aggregate
-│   │   │   ├── base.py                     # DeclarativeBase, TimestampMixin, SoftDeleteMixin
+│   │   │   ├── base.py                     # DeclarativeBase, naming convention, mixins
 │   │   │   ├── site.py                     # sites, lines
 │   │   │   ├── user.py                     # users, notification_preferences
 │   │   │   ├── role.py                     # roles, permissions, role_permissions, user_roles
@@ -157,10 +165,11 @@ kavim/                                      # repo root
 │   │   └── static/                         # frontend/dist mounted here in production
 │   │
 │   ├── tests/
-│   │   ├── conftest.py                     # app, db (testcontainers-postgres), auth fixtures
-│   │   ├── factories.py                    # factory-boy: User, Project, Task, Column
-│   │   ├── unit/                           # ordering, permissions, cell validation, E.164
-│   │   ├── integration/                    # per-module, against real Postgres
+│   │   ├── conftest.py                     # app client; postgres container, migrated
+│   │   │                                   # schema, transaction-per-test rollback
+│   │   ├── factories.py                    # make_user/_project/_task/_column/_invitation
+│   │   ├── unit/                           # config, logging, health, ordering, validation
+│   │   ├── integration/                    # schema guarantees against real Postgres
 │   │   ├── security/
 │   │   │   └── test_all_routes_declare_permission.py   # mechanical FR-209 enforcement
 │   │   └── api/                            # endpoint contract tests
@@ -277,7 +286,6 @@ kavim/                                      # repo root
 │   ├── postgres/init/01-extensions.sql     # pgcrypto citext pg_trgm btree_gin, on first init
 │   ├── caddy/Caddyfile                     # automatic TLS for VM/on-prem deploys
 │   └── scripts/
-│       ├── seed.py                         # demo site, line, users per role, 40-task board
 │       ├── backup.sh                       # pg_dump custom format, encrypted
 │       ├── restore.sh                      # documented restore path (drill quarterly)
 │       └── wait_for_db.sh                  # entrypoint guard before migrations

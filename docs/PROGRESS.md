@@ -18,8 +18,8 @@ Running record of what has been built, what was decided, what broke, and what mu
 | Phase | Scope | State |
 |---|---|---|
 | **0** | Foundation: repo, Docker, `core`, health endpoints, React shell with RTL/i18n, CI | ✅ **Complete and verified** |
-| 1 | Data model, Alembic migrations, seed script | ⬜ Next |
-| 2 | Auth: invite → OTP → register → login → refresh | ⬜ |
+| **1** | Data model, Alembic migration, seed script, integration test harness | ✅ **Complete and verified** |
+| 2 | Auth: invite → OTP → register → login → refresh | ⬜ Next |
 | 3 | RBAC + admin panel | ⬜ |
 | 4 | Projects, groups, column engine | ⬜ |
 | 5 | Tasks, subtasks, cell editing, drag-drop | ⬜ |
@@ -173,6 +173,133 @@ GET http://localhost:5173/api/v1/        → {"name":"Kavim", ..., "default_loca
 
 ---
 
+## Session 2 — 2026-07-26 · Phase 1: Data model
+
+### Delivered
+
+**27 tables** across 13 model modules, one initial Alembic migration (1789 lines), a realistic seed, and an integration test harness running against real PostgreSQL.
+
+| Area | Tables |
+|---|---|
+| Sites | `sites`, `lines` |
+| Identity | `users`, `notification_preferences` |
+| Authorization | `roles`, `permissions`, `role_permissions`, `user_roles` |
+| Auth artefacts | `invitations`, `otp_codes`, `refresh_tokens`, `password_reset_tokens` |
+| Projects | `projects`, `project_members`, `groups`, `saved_views`, `board_columns` |
+| Tasks | `tasks`, `task_assignees`, `task_cell_history`, `task_dependencies` |
+| Collaboration | `comments`, `attachments` |
+| Notifications | `notification_outbox`, `notification_deliveries`, `in_app_notifications` |
+| Audit | `audit_log` |
+
+New `core` modules (all bottom-of-graph, no dependency on `models`):
+
+| Module | Purpose |
+|---|---|
+| `core/enums.py` | All shared enumerations. **Moved out of `models/`** because `core.permissions` needs `RoleKey` and the layering contract forbids `core → models` |
+| `core/permissions.py` | 30 permission strings + the seeded role matrix + `resolve_effective_permissions` (layers 1 ∩ 2). Data only; the `require_permission` dependency lands in Phase 3 |
+| `core/security.py` | argon2id password hashing with transparent rehash, SHA-256 token/OTP digests, `secrets`-based generation, constant-time compare, and `waste_password_time()` for the no-enumeration login branch |
+| `core/time.py` | `utc_now`, `local_today`, `start_of_local_day`, `is_within_quiet_hours` (handles a window that wraps midnight) |
+
+### Design decisions made during implementation
+
+| Decision | Reasoning |
+|---|---|
+| **Enums live in `core`, not `models`** | `core.permissions` needs `RoleKey`. The layering contract puts `models` above `core`, so the import had to go the other way |
+| **`VARCHAR` + `CHECK` instead of native PostgreSQL `ENUM`** | Adding a value to a native enum needs `ALTER TYPE`, which complicates expand/contract deploys. A `CHECK` gives the same integrity for a plain `ALTER` |
+| **Constraint naming convention on `MetaData`** | Without it PostgreSQL invents names, Alembic cannot match them, and `downgrade` fails on names it never knew — exactly when you need it to work |
+| **`search_vector` as a generated column** | Maintained by PostgreSQL, so it cannot drift from the source text. No trigger, no application code to forget |
+| **`lazy="raise_on_sql"` on every relationship** | Under async SQLAlchemy an implicit lazy load raises `MissingGreenlet` at runtime. Making it raise at development time forces explicit `selectinload` |
+| **`viewonly=True` on `User.roles` / `Role.users`** | `user_roles` carries `assigned_by` and `assigned_at`; a plain association write would silently drop them. Assignment goes through `UserRole` rows |
+| **Seed script at `app/scripts/seed.py`, not `infra/scripts/`** | It imports the application, so it must live on the package path. Runs as `python -m app.scripts.seed`, which also works unchanged inside the container. **Deviates from `PROJECT_STRUCTURE.md`, now updated** |
+| **`audit_log` append-only via trigger, not `GRANT`** | The app connects as the table owner in development, and an owner always retains full privileges — so a grant alone would not hold. A trigger holds for every role, including a buggy ORM call, which is the real threat model |
+| **Audit `DELETE` has a deliberate opt-in** | Retention must still prune rows past 24 months, so the maintenance task sets `SET LOCAL kavim.audit_maintenance = 'on'`. Application code cannot delete; the scheduled job can |
+| **`entity_id` on `audit_log` is not a foreign key** | The record of a deletion has to outlive the deleted row. A cascade would erase the history of exactly the deletions most worth auditing |
+
+### Problems found and fixed
+
+Five real defects, every one caught by running the code rather than reading it.
+
+1. **`core` importing `models` broke the layering contract.** Caught by `import-linter`, not by review. Fixed by moving `enums.py` into `core`.
+2. **`AmbiguousForeignKeysError` on `Role.users`.** `user_roles` has two FKs to `users` (`user_id`, `assigned_by`), so the secondary join was ambiguous. Fixed with explicit `primaryjoin`/`secondaryjoin`.
+3. **The seed violated its own `due_date >= start_date` constraint.** Due dates were generated independently of start dates, so an "overdue" task got a start date after its due date. The constraint did its job; the generator now derives `start` from `due`. A test now pins this.
+4. **`alembic/env.py` overwrote the caller's database URL.** It unconditionally set `sqlalchemy.url` from settings, so the integration-test fixture's container URL was clobbered and migrations ran against the *development* database — leaving tests to run on an empty schema (`relation "users" does not exist`). Now honours a URL already set.
+5. **The seed crashed on exit.** `main()` called `dispose_engine()` inside a second `asyncio.run()`, and asyncpg connections belong to the loop that created them (`'NoneType' object has no attribute 'send'`). Disposal moved inside the same loop.
+
+Also: `date.today()` reads the *process* timezone, so on a UTC server at 01:00 Jerusalem time it returns yesterday — an overdue scan would fire a day early. Ruff's `DTZ` rules flagged all three uses; `core/time.py` now provides `local_today()`.
+
+**Self-inflicted, worth recording:** a PowerShell `-replace` round-trip over `seed.py` corrupted every Hebrew string (PS 5.1 read UTF-8 bytes as Windows-1252 and wrote them back as UTF-8) and prepended a BOM. Repaired with a byte-wise reverse mapping and verified against the database. Lesson: never pipe source files through PowerShell string replacement — use the editor.
+
+### Verification evidence
+
+```
+ruff           All checks passed!
+ruff format    42 files already formatted
+mypy --strict  Success: no issues found in 34 source files
+import-linter  Contracts: 4 kept, 0 broken
+pytest         52 passed          (25 unit + 27 integration)
+```
+
+Migration round-trip, the step that is usually skipped and later regretted:
+
+```
+alembic upgrade head    -> 28 tables (27 + alembic_version)
+alembic downgrade base  ->  1 table, 0 orphaned functions or triggers
+alembic upgrade head    -> 28 tables
+```
+
+The append-only guard, all four cases:
+
+```
+INSERT                                        -> ok
+UPDATE audit_log                              -> ERROR: append-only: UPDATE is never permitted
+DELETE audit_log                              -> ERROR: append-only: DELETE requires SET LOCAL …
+SET LOCAL kavim.audit_maintenance='on'; DELETE -> DELETE 1
+```
+
+Seed output, idempotent on re-run:
+
+```
+permissions 30 | roles 5 | role_permissions 83 | users 7
+projects 1 | board_columns 12 | groups 3
+tasks 43 (20 parents + 23 subtasks) | task_assignees 43 | comments 12
+```
+
+Hebrew renders correctly from the database after the encoding repair:
+
+```
+קו 3 — ביקורת היגיינה שבועית
+סטטוס | אחראי | תאריך התחלה | תאריך יעד
+בדיקת ניקיון מסוע ראשי
+```
+
+The 27 integration tests assert the schema's actual promises, not its shape: CITEXT case-folding, every CHECK constraint firing, cascade behaviour, `ON DELETE RESTRICT` protecting a user with history, JSONB type round-tripping, GIN containment queries, partial-index uniqueness letting a soft-deleted column key be reused, generated search vectors matching Hebrew, fractional-index insertion without neighbour rewrites, and one-live-invitation-per-email.
+
+### Demo accounts
+
+Password for all: `KavimDemo2026!`
+
+| Email | Role |
+|---|---|
+| `admin@kavim.local` | System admin |
+| `manager@kavim.local` | Line manager |
+| `supervisor@kavim.local` | Shift supervisor |
+| `worker1@kavim.local` … `worker3@kavim.local` | Worker |
+| `auditor@kavim.local` | Viewer / auditor |
+
+The demo board demonstrates the column-permission asymmetry that FR-205 exists for: workers can edit `Status`, `Due date`, `Station`, `Measured temperature`, and `Corrective action`, but `Verified` and `Root cause approved by` are manager-only — a worker cannot sign off their own fix.
+
+### Known gaps left deliberately
+
+| Gap | Why, and when it closes |
+|---|---|
+| Cross-module router contract still absent from `.importlinter` | Added in Phase 2 with the first routers |
+| Coverage gate still not enforced | Turns on in Phase 2, when `auth` and `permissions` are the modules being measured |
+| `core/permissions.py` has no `require_permission` dependency yet | Phase 3, with the admin panel |
+| Restricted database role for production | The trigger covers the threat; the role split is an operations task for Phase 17 |
+| Nothing committed since `45224b9` | Phase 1 work is uncommitted and unpushed |
+
+---
+
 ## Blocked / awaiting external action
 
 These have lead times and are **not** blocked on development. Starting them now keeps them off the critical path.
@@ -189,27 +316,41 @@ These have lead times and are **not** blocked on development. Starting them now 
 
 ---
 
-## Next step — Phase 1: Data model
+## Next step — Phase 2: Authentication
 
-Nothing external blocks this.
+Nothing external blocks this. SendGrid runs in sandbox mode, so the full flow is
+testable without a verified sender domain (E1).
 
 **To do**
 
-1. First commit (repo is initialized; `main.py` boilerplate already removed). Include `frontend/package-lock.json`.
-2. `app/models/base.py` — `DeclarativeBase`, `TimestampMixin`, `SoftDeleteMixin`, UUID primary-key default.
-3. All ORM models per `SPEC.md` §7: `sites`, `lines`, `users`, `roles`, `permissions`, `role_permissions`, `user_roles`, `invitations`, `otp_codes`, `refresh_tokens`, `projects`, `project_members`, `groups`, `board_columns`, `tasks`, `task_assignees`, `task_cell_history`, `task_dependencies`, `comments`, `attachments`, `notification_outbox`, `notification_deliveries`, `notification_preferences`, `audit_log`, `saved_views`.
-4. Alembic setup (`alembic.ini`, `env.py` wired to the async engine) plus one complete initial migration — easier to review as one migration than as fifteen during initial design.
-5. Indexes from §7.2, including the `tasks.custom` GIN index and the partial indexes that exclude soft-deleted rows.
-6. Grant the application role `INSERT`/`SELECT` only on `audit_log` — no `UPDATE`, no `DELETE`, so the trail cannot be rewritten by application code.
-7. `infra/scripts/seed.py` — demo site and line, one user per role, a realistic ~40-task hygiene-audit project with custom columns, groups, subtasks, and comments.
-8. `tests/conftest.py` integration fixtures using `testcontainers-postgres` (real Postgres, never SQLite — JSONB, GIN, `CITEXT`, and `SKIP LOCKED` all differ), plus `factory-boy` factories.
-9. Enable the migration round-trip step in CI.
+1. Commit and push Phase 0 + Phase 1 (see the gap table above — nothing since `45224b9`).
+2. `core/security.py` additions: JWT encode/decode, the short-lived `registration_ticket`, refresh-token rotation helpers.
+3. `core/rate_limit.py` — Redis token bucket: login 10 per 15 min per IP *and* per email, OTP verify 5 per code, OTP request 3 per 15 min per email.
+4. `schemas/auth.py` — Pydantic request/response models; these become the OpenAPI contract the frontend types are generated from.
+5. `modules/auth/` — `invitations.py`, `otp.py`, `passwords.py`, `service.py`, `router.py`. The exact flow is specified in `SPEC.md` §8.1 and must be followed step for step: the registration email comes from the invitation row, never from the submitted form, and the OTP goes to the invited address.
+6. Refresh rotation with **reuse detection** — presenting an already-rotated token revokes the whole `family_id` and emails the user.
+7. `integrations/sendgrid_client.py` with sandbox mode, plus the outbox row written in the same transaction as the invitation.
+8. Add the cross-module router contract to `.importlinter`, and turn on the coverage gate (90% on `auth`).
+9. Frontend `features/auth/`: `InvitationLanding`, `OtpVerify`, `Register`, `Login`, `ForgotPassword` — Hebrew RTL, mobile-first.
+10. Attach the `Authorization` header and refresh-on-401 at the marked seam in `api/client.ts`, with a single-flight guard so concurrent 401s trigger exactly one refresh.
 
 **Done when**
 
-- `alembic upgrade head` → `downgrade base` → `upgrade head` round-trips cleanly
-- The seeded demo board is queryable and its shape matches the ERD in `SPEC.md` §7
-- Integration tests run green against a real Postgres container
+- Playwright walks invite → OTP → register → login → refresh → logout in both `he` and `en`
+- An expired or already-consumed invitation returns `410`
+- 10 failed logins lock the account for 15 minutes, and the lock is audited
+- A replayed refresh token revokes the entire family
+- Unknown and known emails are indistinguishable in both response and timing
+
+**Verify Phase 1 yourself**
+
+```bash
+docker compose -f infra/docker-compose.yml up -d db redis
+cd backend
+uv run alembic upgrade head
+uv run python -m app.scripts.seed --reset
+uv run pytest                      # 52 passed
+```
 
 **Currently running in this session** (background processes, safe to stop)
 

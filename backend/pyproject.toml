@@ -89,7 +89,10 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S", "T20"]
-"alembic/**" = ["I001"]
+"alembic/versions/**" = ["I001", "E501"]
+# Enum members named PASSWORD / PASSWORD_RESET are auth-provider and event
+# identifiers, not credentials.
+"app/core/enums.py" = ["S105"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["app"]
@@ -120,7 +123,11 @@ disallow_untyped_decorators = false
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
-asyncio_default_fixture_loop_scope = "function"
+# Session scope, because the PostgreSQL container and the engine built on it are
+# session-scoped fixtures — a per-function loop cannot hold connections that
+# outlive the function.
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"
 addopts = "-q --strict-markers --strict-config"
 markers = [
     "integration: requires a real PostgreSQL container",
