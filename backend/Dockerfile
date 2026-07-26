@@ -21,11 +21,15 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 WORKDIR /app
 
 # ── dependency layer ──────────────────────────────────────────────────────
-# Only pyproject.toml is copied here, so this layer is cached and rebuilds
+# Only the build metadata is copied here, so this layer is cached and rebuilds
 # only when dependencies change — not on every source edit. The stub package
 # exists solely to satisfy the editable install.
+#
+# README.md is required, not optional: pyproject.toml declares
+# `readme = "README.md"`, and hatchling raises
+# `OSError: Readme file does not exist` without it.
 FROM base AS deps
-COPY backend/pyproject.toml ./
+COPY backend/pyproject.toml backend/README.md ./
 RUN mkdir -p app && touch app/__init__.py \
  && uv pip install --system --no-cache-dir -e ".[dev]"
 
@@ -45,7 +49,7 @@ CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload
 # The built frontend is copied into app/static by the release pipeline
 # (see docs/SPEC.md §5.5) — FastAPI then serves the SPA from the same origin.
 FROM base AS prod
-COPY backend/pyproject.toml ./
+COPY backend/pyproject.toml backend/README.md ./
 RUN mkdir -p app && touch app/__init__.py \
  && uv pip install --system --no-cache-dir . \
  && rm -rf /root/.cache
