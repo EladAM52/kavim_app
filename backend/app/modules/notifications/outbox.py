@@ -275,6 +275,55 @@ async def dispatch_row(
         )
         return "dead_lettered"
 
+    except Exception as exc:
+        # Anything the provider seam did not classify. The docstring above promises
+        # `dispatch_row` never raises, and before this block that promise held only
+        # for `EmailError` — a `UnicodeEncodeError` from the success log line inside
+        # `send()` escaped, rolled back the transaction, and left the row `pending`
+        # after Gmail had already accepted the message. The next tick re-sent it.
+        # Observed in the wild: two deliveries, one row, `attempts=0`, and no upper
+        # bound on the repeat.
+        #
+        # The honest position after an unclassified error is that we **do not know**
+        # whether the provider accepted it. Both answers are wrong in some case, so
+        # the choice is which failure to prefer: a duplicate OTP is an annoyance, a
+        # silently lost one locks somebody out. So this retries — but as a normal
+        # attempt, which means `MAX_DELIVERY_ATTEMPTS` bounds it and the row
+        # dead-letters instead of looping forever.
+        row.last_error = f"{type(exc).__name__}: {exc}"
+        row.status = OutboxStatus.FAILED
+
+        if row.attempts < MAX_DELIVERY_ATTEMPTS:
+            row.next_attempt_at = now + next_attempt_delay(row.attempts)
+            _record_delivery(
+                db, row, address=address, status=DeliveryStatus.PENDING, error=str(exc)
+            )
+            logger.error(
+                "outbox_row_unclassified_failure",
+                outbox_id=row.id,
+                notification_event=row.event.value,
+                attempts=row.attempts,
+                error_type=type(exc).__name__,
+                error=str(exc),
+            )
+            return "failed"
+
+        # The ceiling applies here too. Without it "retry an unknown error" becomes
+        # "retry forever", which is the same unbounded resend the broad catch was
+        # added to prevent — just reached by a different route.
+        row.attempts = MAX_DELIVERY_ATTEMPTS
+        row.processed_at = now
+        _record_delivery(db, row, address=address, status=DeliveryStatus.FAILED, error=str(exc))
+        logger.error(
+            "outbox_row_dead_lettered",
+            outbox_id=row.id,
+            notification_event=row.event.value,
+            error_type=type(exc).__name__,
+            error=str(exc),
+            unclassified=True,
+        )
+        return "dead_lettered"
+
     row.status = OutboxStatus.DONE
     row.processed_at = now
     row.last_error = None

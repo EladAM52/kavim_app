@@ -167,6 +167,62 @@ async def test_a_transient_failure_backs_off_and_stays_queued(db: AsyncSession) 
     assert (await _deliveries(db, row.id))[0].status is DeliveryStatus.PENDING
 
 
+async def test_an_error_the_provider_seam_did_not_classify_does_not_loop_forever(
+    db: AsyncSession,
+) -> None:
+    """The duplicate-send bug, pinned.
+
+    `dispatch_row` used to catch only `EmailError`. Anything else escaped, rolled
+    the transaction back, and left the row `pending` — so the next tick sent the
+    same message again, and the one after that, with `attempts` never advancing.
+
+    It was not hypothetical. `smtp_client.send()` logs `email_sent` *after* the
+    SMTP transaction, with the subject in it; on a cp1252 Windows console a Hebrew
+    subject made that log call raise `UnicodeEncodeError`. Two real deliveries went
+    out for one row before the worker was stopped.
+
+    `configure_logging` now forces UTF-8 streams so that specific trigger is gone.
+    This asserts the containment rather than the trigger: whatever the unknown
+    error is, the row must advance through the normal retry budget and stop.
+    """
+    row = await _queue_otp(db)
+    sender = RecordingSender(raise_error=UnicodeEncodeError("charmap", "א", 0, 1, "nope"))
+
+    result = await outbox.sweep(db, sender=sender)
+
+    assert result.failed == 1
+    await db.refresh(row)
+    # The crucial part: `attempts` moved. A row stuck at 0 is a row that resends
+    # every tick until somebody notices.
+    assert row.attempts == 1
+    assert row.status is OutboxStatus.FAILED
+    assert row.next_attempt_at > utc_now()
+    assert "UnicodeEncodeError" in (row.last_error or "")
+
+
+async def test_an_unclassified_error_still_dead_letters_at_the_retry_ceiling(
+    db: AsyncSession,
+) -> None:
+    """Bounded, not merely delayed.
+
+    Retrying at all is a deliberate choice — after an unclassified error nobody
+    knows whether the provider accepted the message, and a duplicate OTP is a far
+    smaller harm than one that never arrives. What must not happen is unbounded
+    repetition, so it exhausts the same budget as any other failure.
+    """
+    row = await _queue_otp(db)
+    sender = RecordingSender(raise_error=RuntimeError("something nobody anticipated"))
+
+    for _ in range(MAX_DELIVERY_ATTEMPTS + 1):
+        row.next_attempt_at = utc_now() - timedelta(seconds=1)
+        await db.flush()
+        await outbox.sweep(db, sender=sender)
+
+    await db.refresh(row)
+    assert row.attempts == MAX_DELIVERY_ATTEMPTS
+    assert row.processed_at is not None
+
+
 async def test_an_auth_failure_dead_letters_immediately(db: AsyncSession) -> None:
     """`535` means the App Password was revoked. Five backed-off retries would turn
     a total outbound-mail outage into one nobody notices for ten hours (SPEC R14)."""

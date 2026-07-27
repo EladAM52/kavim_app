@@ -887,6 +887,34 @@ literals against the constants the tasks actually register under.
 `app/workers/` went from **0% to 49%** coverage as a result — the boundary that had never been
 tested is now the boundary with a regression test.
 
+**6. Starting beat immediately exposed a duplicate-send bug.** Within two minutes of the
+scheduler working for the first time, one outbox row produced **two real deliveries** and stayed
+`pending` with `attempts=0`. It would have kept going every 30 seconds.
+
+The chain: `smtp_client.send()` logs `email_sent` — including the subject — *after* the SMTP
+transaction completes. On a Windows cp1252 console a Hebrew subject makes that `print()` raise
+`UnicodeEncodeError`. `dispatch_row` caught only `EmailError`, so it escaped, the transaction
+rolled back, and the row reverted to `pending` **after Gmail had accepted the message**.
+
+Two fixes, because there are two faults:
+
+- **`configure_logging` now forces UTF-8 on stdout and stderr**, with `errors="replace"`. A log
+  line must never be able to take down the thing it is reporting on. `seed.py` and `invite.py`
+  each carried a private copy of this fix, which is exactly why the worker — a third entry
+  point — did not have it. It is central now.
+- **`dispatch_row` catches `Exception`, not just `EmailError`**, and its docstring's promise that
+  it never raises is finally true. After an unclassified error nobody knows whether the provider
+  accepted the message; it retries, because a duplicate OTP is a smaller harm than a lost one,
+  but through the normal attempt budget so it dead-letters instead of looping.
+
+The second fix was itself incomplete on the first pass — the new branch retried without checking
+the ceiling, so `attempts` climbed past `MAX_DELIVERY_ATTEMPTS` forever. The test caught it at 6.
+Unbounded resend reached by a different route is still unbounded resend.
+
+`.env` now defaults to `EMAIL_DRY_RUN=true` again. Real credentials plus real sending as the
+standing default means every test invitation is a real email against a ~500/day ceiling, and
+every `@example.com` fixture address is a bounce. Flipping it is deliberate.
+
 ### Probes — an assertion nobody has seen fail is not known to work
 
 Four, all run and all reverted:

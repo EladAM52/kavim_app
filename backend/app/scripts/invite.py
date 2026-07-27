@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import sys
 from collections.abc import Sequence
 
@@ -146,12 +147,93 @@ async def _sweep() -> int:
     return 0
 
 
+async def _create_json(email: str, role_key: RoleKey) -> int:
+    """`--json`: the same invitation, as one line of machine-readable output.
+
+    This is the seam Playwright uses. An end-to-end test has to *start* from a
+    real invitation, and the alternatives are worse: a second minting path in the
+    test harness would drift from the real one, and reaching into PostgreSQL from
+    Node means a second database driver in the frontend toolchain.
+
+    Nothing test-only is added to the application — this reuses `invite_user`,
+    which is the same function `POST /admin/invitations` calls.
+    """
+    from app.core.database import get_sessionmaker
+
+    async with get_sessionmaker()() as db:
+        role = await db.scalar(select(Role).where(Role.key == role_key))
+        inviter = await db.scalar(
+            select(User).where(User.deleted_at.is_(None)).order_by(User.created_at).limit(1)
+        )
+        if role is None or inviter is None:
+            print(json.dumps({"error": "not seeded"}), file=sys.stderr)  # noqa: T201
+            return 1
+
+        invitation, raw_token = await invite_user(
+            db,
+            email=email,
+            role_id=role.id,
+            invited_by=inviter.id,
+            locale=Locale(settings.DEFAULT_LOCALE),
+        )
+        await db.commit()
+
+        print(  # noqa: T201
+            json.dumps(
+                {
+                    "id": str(invitation.id),
+                    "email": email,
+                    "token": raw_token,
+                    "url": registration_url(raw_token),
+                }
+            )
+        )
+    return 0
+
+
+async def _latest_otp(email: str) -> int:
+    """`--otp EMAIL`: the code most recently *queued* for an address.
+
+    Read from the outbox payload rather than `otp_codes`, because only the digest
+    is stored there — the plaintext exists exactly once, in the message. Reading
+    it back is what lets a test complete the flow without a mailbox.
+
+    Deliberately does not sweep. A test that wants the mail actually sent calls
+    `--sweep` itself, so the two steps stay separable and a test can assert on
+    the queued state before dispatch.
+    """
+    from app.core.database import get_sessionmaker
+
+    async with get_sessionmaker()() as db:
+        rows = await db.scalars(
+            select(NotificationOutbox)
+            .where(NotificationOutbox.event == "otp_code")
+            .order_by(NotificationOutbox.id.desc())
+            .limit(20)
+        )
+        for row in rows:
+            payload = row.payload or {}
+            if str(payload.get("to_email", "")).lower() != email.lower():
+                continue
+            code = (payload.get("context") or {}).get("code")
+            if code:
+                print(json.dumps({"email": email, "code": code}))  # noqa: T201
+                return 0
+
+    print(json.dumps({"error": f"no queued otp for {email}"}), file=sys.stderr)  # noqa: T201
+    return 1
+
+
 async def _run(args: argparse.Namespace) -> int:
     from app.core.database import dispose_engine
 
     try:
+        if args.otp:
+            return await _latest_otp(args.otp)
         if args.sweep:
             return await _sweep()
+        if args.json:
+            return await _create_json(args.email, RoleKey(args.role))
         return await _create(args.email, RoleKey(args.role))
     finally:
         # Inside the same loop: asyncpg connections belong to the loop that created
@@ -175,10 +257,20 @@ def main(argv: Sequence[str] | None = None) -> int:
         action="store_true",
         help="dispatch queued notifications and print any verification code",
     )
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help="emit the invitation as one line of JSON (used by the e2e suite)",
+    )
+    parser.add_argument(
+        "--otp",
+        metavar="EMAIL",
+        help="print the verification code most recently queued for an address",
+    )
     args = parser.parse_args(argv)
 
-    if not args.sweep and not args.email:
-        parser.error("provide an email address, or --sweep")
+    if not (args.sweep or args.otp) and not args.email:
+        parser.error("provide an email address, or --sweep, or --otp EMAIL")
 
     # Hebrew project names reach stdout via the sweeper's logging, and a Windows
     # console defaults to cp1252 — which kills the run partway with

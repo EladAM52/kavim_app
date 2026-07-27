@@ -19,6 +19,7 @@ Mixing them raises ``AttributeError: 'WriteLogger' object has no attribute
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import sys
 from contextvars import ContextVar
@@ -49,12 +50,45 @@ def _renderer() -> structlog.types.Processor:
     return structlog.dev.ConsoleRenderer(colors=True)
 
 
+def _force_utf8_streams() -> None:
+    """Make it impossible for a log line to raise because of the console encoding.
+
+    This is not cosmetics. A Windows console defaults to cp1252, and the moment a
+    Hebrew subject line reaches a log call, `print()` raises `UnicodeEncodeError`
+    from inside the logger.
+
+    That cost real duplicate emails. `smtp_client.send()` logs `email_sent` — with
+    the subject — *after* the SMTP transaction completes. On a cp1252 console that
+    log call raised, the exception escaped past `dispatch_row`'s `except EmailError`
+    (a `UnicodeEncodeError` is not one), the transaction rolled back, and the
+    outbox row stayed `pending` despite the mail having gone. The next 30-second
+    tick sent it again. Observed: two deliveries, one row, `attempts=0`, and it
+    would have continued indefinitely.
+
+    Doing it here rather than per entry point matters — `seed.py` and `invite.py`
+    each carried their own copy of this fix, which is precisely why the *worker*
+    did not have it.
+
+    `errors="replace"` rather than strict: a log line that cannot represent a
+    character should degrade to `?`, never take down the thing it was reporting on.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        # A detached or already-wrapped stream refuses; that is not worth failing
+        # startup over, and the strict-encoding console is still better than none.
+        with contextlib.suppress(ValueError, OSError):
+            reconfigure(encoding="utf-8", errors="replace")
+
+
 def configure_logging() -> None:
     """Configure structlog and route stdlib logging through it.
 
     Called once from the application factory and once from the Celery worker
     bootstrap, so the API and the workers produce identically shaped output.
     """
+    _force_utf8_streams()
     renderer = _renderer()
 
     # ── native chain: structlog loggers (WriteLogger) ─────────────────────
