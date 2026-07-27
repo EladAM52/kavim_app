@@ -20,12 +20,11 @@ export function LanguageToggle(): React.JSX.Element {
   const { t } = useTranslation();
   const { locale, setLocale } = useDirection();
 
+  // No track and no border: the group blends into whatever it sits on (the
+  // brand-700 header today), and only the selected locale is picked out with a
+  // white pill.
   return (
-    <div
-      role="group"
-      aria-label={t('language.label')}
-      className="inline-flex overflow-hidden rounded-lg border border-slate-300 bg-white"
-    >
+    <div role="group" aria-label={t('language.label')} className="inline-flex gap-1 rounded-lg">
       {OPTIONS.map(({ locale: option, labelKey }) => {
         const active = option === locale;
         return (
@@ -38,11 +37,15 @@ export function LanguageToggle(): React.JSX.Element {
               setLocale(option);
             }}
             className={cn(
-              'touch-target px-3 text-sm font-medium transition-colors',
-              'border-e border-slate-200 last:border-e-0',
+              'touch-target rounded-md px-3 text-sm transition-colors',
+              // Weight carries the selection as well as the background, so the
+              // state survives high-contrast mode and greyscale printing.
+              // brand-100 is the same token the header tagline uses — known
+              // readable on brand-700 without going full white and competing
+              // with the selected pill.
               active
-                ? 'bg-brand-700 text-white'
-                : 'text-slate-700 hover:bg-slate-50 active:bg-slate-100',
+                ? 'text-brand-700 bg-white font-semibold shadow-sm'
+                : 'text-brand-100 font-medium hover:bg-white/10 hover:text-white',
             )}
           >
             {t(labelKey)}
