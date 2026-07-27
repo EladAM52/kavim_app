@@ -1,0 +1,22 @@
+<div dir="rtl" lang="he" style="font-family: Arial, Helvetica, sans-serif; font-size: 15px; line-height: 1.6; color: #1e293b; text-align: right;">
+  <p>קוד האימות שלך למערכת <strong>קווים</strong>:</p>
+
+  {# dir="ltr" on the code itself: a 6-digit number inside RTL text can render in
+     the wrong order, and a misread verification code is unusable. #}
+  <p dir="ltr" style="font-family: monospace; font-size: 34px; font-weight: bold; letter-spacing: 8px; color: #0f766e; margin: 24px 0; text-align: center;">
+    {{ code }}
+  </p>
+
+  <p style="font-size: 13px; color: #64748b;">
+    הקוד תקף ל-<span dir="ltr">{{ ttl_minutes }}</span> דקות ומיועד לשימוש חד-פעמי.
+  </p>
+
+  <p style="font-size: 13px; color: #b45309;">
+    לא ביקשת קוד? התעלם מהודעה זו. אל תעביר את הקוד לאף אדם, גם לא למי שמציג את עצמו כאיש תמיכה.
+  </p>
+
+  <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 24px 0;" />
+  <p style="font-size: 12px; color: #94a3b8;">
+    קווים · הודעה זו נשלחה אוטומטית. אין להשיב לה.
+  </p>
+</div>

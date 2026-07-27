@@ -51,7 +51,11 @@ def _password_hash() -> str:
 
 
 def unique_email(prefix: str = "user") -> str:
-    return f"{prefix}-{uuid.uuid4().hex[:10]}@kavim.test"
+    # example.com, not kavim.test: `.test` is a special-use TLD and RFC-compliant
+    # email validation rejects it, so factory addresses would fail the very
+    # request schemas the tests exercise. example.com is IANA's
+    # reserved-for-documentation domain — valid syntax, guaranteed undeliverable.
+    return f"{prefix}-{uuid.uuid4().hex[:10]}@example.com"
 
 
 async def make_user(

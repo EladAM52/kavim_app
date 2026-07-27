@@ -148,13 +148,13 @@ async def seed_roles(db: AsyncSession, permissions: dict[str, Permission]) -> di
 #  demo data
 # ══════════════════════════════════════════════════════════════════════════
 DEMO_USERS: tuple[tuple[str, str, RoleKey, str | None], ...] = (
-    ("admin@kavim.local", "אלעד מנהל מערכת", RoleKey.SYSTEM_ADMIN, None),
-    ("manager@kavim.local", "רונית מנהלת קו", RoleKey.LINE_MANAGER, "+972501000001"),
-    ("supervisor@kavim.local", "יוסי אחראי משמרת", RoleKey.SHIFT_SUPERVISOR, "+972501000002"),
-    ("worker1@kavim.local", "מאיה עובדת קו", RoleKey.WORKER, "+972501000003"),
-    ("worker2@kavim.local", "דוד עובד קו", RoleKey.WORKER, "+972501000004"),
-    ("worker3@kavim.local", "נועה עובדת קו", RoleKey.WORKER, None),
-    ("auditor@kavim.local", "תמר מבקרת איכות", RoleKey.VIEWER, None),
+    ("admin@kavim.example.com", "אלעד מנהל מערכת", RoleKey.SYSTEM_ADMIN, None),
+    ("manager@kavim.example.com", "רונית מנהלת קו", RoleKey.LINE_MANAGER, "+972501000001"),
+    ("supervisor@kavim.example.com", "יוסי אחראי משמרת", RoleKey.SHIFT_SUPERVISOR, "+972501000002"),
+    ("worker1@kavim.example.com", "מאיה עובדת קו", RoleKey.WORKER, "+972501000003"),
+    ("worker2@kavim.example.com", "דוד עובד קו", RoleKey.WORKER, "+972501000004"),
+    ("worker3@kavim.example.com", "נועה עובדת קו", RoleKey.WORKER, None),
+    ("auditor@kavim.example.com", "תמר מבקרת איכות", RoleKey.VIEWER, None),
 )
 
 
@@ -420,10 +420,10 @@ async def seed_demo_project(db: AsyncSession, line: Line, users: dict[str, User]
     # the same board and screenshots stay comparable.
     rng = random.Random(RNG_SEED)  # noqa: S311
     today = local_today()
-    manager = users["manager@kavim.local"]
-    supervisor = users["supervisor@kavim.local"]
-    workers = [users[f"worker{n}@kavim.local"] for n in (1, 2, 3)]
-    auditor = users["auditor@kavim.local"]
+    manager = users["manager@kavim.example.com"]
+    supervisor = users["supervisor@kavim.example.com"]
+    workers = [users[f"worker{n}@kavim.example.com"] for n in (1, 2, 3)]
+    auditor = users["auditor@kavim.example.com"]
 
     project = Project(
         line_id=line.id,
@@ -644,6 +644,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     parser.add_argument("--reset", action="store_true", help="delete existing demo data first")
     args = parser.parse_args(argv)
+
+    # The seed logs Hebrew project and task names. A Windows console defaults to
+    # cp1252, which cannot encode them, so the run dies with UnicodeEncodeError
+    # partway through — after writing rows, which makes it look like a data bug.
+    # Reconfiguring the streams keeps the documented command working as written
+    # instead of requiring PYTHONIOENCODING to be set first.
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
 
     configure_logging()
 

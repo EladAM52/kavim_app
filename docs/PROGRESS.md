@@ -20,7 +20,7 @@ Running record of what has been built, what was decided, what broke, and what mu
 |---|---|---|
 | **0** | Foundation: repo, Docker, `core`, health endpoints, React shell with RTL/i18n, CI | ✅ **Complete and verified** |
 | **1** | Data model, Alembic migration, seed script, integration test harness | ✅ **Complete and verified** |
-| 2 | Auth: invite → OTP → register → login → refresh | ⬜ Next |
+| 2 | Auth: invite → OTP → register → login → refresh | 🟨 **Backend complete and verified. Frontend and the outbox dispatcher outstanding** |
 | 3 | RBAC + admin panel | ⬜ |
 | 4 | Projects, groups, column engine | ⬜ |
 | 5 | Tasks, subtasks, cell editing, drag-drop | ⬜ |
@@ -281,11 +281,11 @@ Password for all: `KavimDemo2026!`
 
 | Email | Role |
 |---|---|
-| `admin@kavim.local` | System admin |
-| `manager@kavim.local` | Line manager |
-| `supervisor@kavim.local` | Shift supervisor |
-| `worker1@kavim.local` … `worker3@kavim.local` | Worker |
-| `auditor@kavim.local` | Viewer / auditor |
+| `admin@kavim.example.com` | System admin |
+| `manager@kavim.example.com` | Line manager |
+| `supervisor@kavim.example.com` | Shift supervisor |
+| `worker1@kavim.example.com` … `worker3@kavim.example.com` | Worker |
+| `auditor@kavim.example.com` | Viewer / auditor |
 
 The demo board demonstrates the column-permission asymmetry that FR-205 exists for: workers can edit `Status`, `Due date`, `Station`, `Measured temperature`, and `Corrective action`, but `Verified` and `Root cause approved by` are manager-only — a worker cannot sign off their own fix.
 
@@ -376,7 +376,7 @@ registration for a channel with no identified requirement yet.
   accepted it", not "the inbox received it" (FR-713). Bounces arrive as mail to
   `kavimsupport@gmail.com` and are not ingested.
 - **`From` is locked to the Gmail account.** Free Gmail rewrites anything else *silently*
-  rather than rejecting it, so `no-reply@kavim.local` is unavailable and mail visibly comes
+  rather than rejecting it, so `no-reply@kavim.example.com` is unavailable and mail visibly comes
   from `@gmail.com` — which corporate spam filters treat with suspicion (R13). Test against
   the plant's real mail domain early, not at pilot.
 
@@ -429,6 +429,115 @@ The integration files themselves (`email.py`, `smtp_client.py`, the templates, `
 configuration, the dependencies, and the boundary rules — the decisions that are expensive to
 reverse once code is written against them. Writing the client before the contract settled is
 the sequence that produces rework.
+
+---
+
+## Session 5 — 2026-07-27 · Phase 2 backend: authentication
+
+### Delivered
+
+10 auth endpoints, the email transport, and 38 new tests. **99 passing, 84% coverage.**
+
+| Area | Files |
+|---|---|
+| JWT + refresh helpers | `core/security.py` — access tokens, the 15-minute `scope=register` ticket, refresh families. Scope is checked on decode, so a registration ticket cannot authenticate API calls |
+| Rate limiting | `core/rate_limit.py` — Redis sliding window via a Lua script, so check-and-consume is atomic. Fails **open**, justified below |
+| Contract | `schemas/auth.py` — the OpenAPI source the frontend types generate from |
+| Email transport | `integrations/email.py` (the `EmailSender` protocol) + `integrations/smtp_client.py` (aiosmtplib, dry-run, SMTP error classification) |
+| Templates | `modules/notifications/templates/` — `invitation`, `otp_code`, `password_reset`, `account_locked`, each `he` + `en`, rendered with Jinja2 |
+| Outbox write path | `modules/notifications/service.py` — queues rows in the caller's transaction, sends nothing |
+| Audit write path | `modules/audit/service.py` — 16 named auth actions, secret scrubbing |
+| Auth module | `modules/auth/` — `invitations.py`, `otp.py`, `passwords.py`, `service.py`, `dependencies.py`, `router.py` |
+
+Endpoints: `GET /auth/invitations/{token}`, `POST /auth/otp/request`, `/otp/verify`, `/register`,
+`/login`, `/refresh`, `/logout`, `/logout-all`, `/password-reset/request`, `/password-reset/confirm`.
+
+### Three real bugs the tests caught, all the same shape
+
+Worth recording as a class, because it will recur in every module that records a
+failure:
+
+**`get_db` rolls back on exception, and security bookkeeping describes the failure
+being raised.** So the write was undone by the very error that recorded it:
+
+| Where | Consequence if shipped |
+|---|---|
+| `login` — `failed_login_count` increment | The counter never reaches 10. **Account lockout could never fire.** |
+| `otp.verify_otp` — `attempts` increment | The attempt counter stays at 0. **A 6-digit code was guessable without limit.** |
+| `rotate_refresh_token` — family revocation | Reuse detection detects theft and then **revokes nothing.** |
+
+Each now commits before raising, commented at the site. This was only findable
+because the test fixture mirrors the real dependency's rollback — a fixture that
+just yielded the session would have shown all three as passing.
+
+Two more, found the same way:
+
+- **`Content-Language` was never sent.** `EmailMessage.set_content()` calls
+  `clear_content()`, which deletes every `Content-*` header — so setting it before
+  the body silently dropped it. Now set after.
+- **Coverage was lying.** Async SQLAlchemy runs database IO inside greenlets and
+  coverage loses the trace there: `service.py` measured 38% while every one of its
+  tests was green. `concurrency = ["greenlet", "thread"]` fixed it — the same file
+  now reads 92%. A misleading coverage number is worse than none.
+
+### Design decisions made during implementation
+
+| Decision | Reasoning |
+|---|---|
+| **Rate limiting fails open** | Every limit sits in front of a database counter: `failed_login_count`, `otp_codes.attempts`, single-use tokens. Redis is the cheap first line; the database holds the guarantee. Failing closed would turn a Redis restart into a total login outage in exchange for protection that is already there |
+| **Refresh tokens are opaque, not JWTs** | A refresh token must be revocable. A self-contained JWT cannot be revoked before it expires, which defeats reuse detection entirely |
+| **Access tokens re-load the user every request** | A JWT stays valid until expiry, so a user deactivated 30 seconds ago would still authenticate from the token alone. The 15-minute lifetime bounds the window; the database read closes it |
+| **`EmailStr` inbound, plain `str` outbound** | Validating an inbound address catches a typo. Validating an outbound one re-checks what the database already holds, so it can only turn a readable row into a 500 — which is exactly what happened with an address at a special-use domain |
+| **Demo and test addresses moved to `example.com`** | `.local` and `.test` are special-use TLDs that RFC-compliant validation rejects, so `admin@kavim.example.com` **could not have logged in**. `example.com` is IANA's documentation domain: valid syntax, guaranteed undeliverable |
+| **`404` for an unknown invitation token, `410` for a spent one** | Both require possessing a 256-bit token, so neither is an oracle — and "your link expired" is materially more useful than "not found" |
+| **The router contract is now enforced** | Deferred since Phase 0 because import-linter errors on absent modules. Verified by probe: a temporary cross-module router import reported `BROKEN`, and removing it reported `KEPT` |
+
+### Verification evidence
+
+```
+ruff           All checks passed!
+mypy --strict  Success: no issues found in 50 source files
+import-linter  Contracts: 5 kept, 0 broken
+pytest         99 passed          (was 61)
+coverage       84%  — modules/auth: service 92%, router 99%, otp 95%, passwords 94%
+```
+
+Live against the running server, after re-seeding:
+
+```
+POST /auth/login  wrong password           -> 401  (identical body for an unknown address)
+POST /auth/login  admin@kavim.example.com  -> 200  SYSTEM_ADMIN, 30 permissions
+set-cookie: kavim_refresh=…; HttpOnly; Max-Age=2592000; Path=/api/v1/auth; SameSite=strict
+```
+
+Hebrew mail renders and dry-run sends:
+
+```
+SUBJECT      קוד האימות שלך: 482913
+SUBJ HDR     =?utf-8?…  (RFC 2047 encoded)
+CONTENT-LANG he
+MULTIPART    True   (text + html alternative)
+SENT         dry_run=True accepted=1
+```
+
+### Known gaps — read before continuing
+
+| Gap | Consequence |
+|---|---|
+| **The outbox sweeper does not exist** | Invitation and OTP mail is *queued and never delivered*. The flow is complete server-side and the tests read the code out of the outbox payload, but **a human cannot currently complete registration.** This is the single blocking item for a usable Phase 2 |
+| **No frontend** | `features/auth/` is not built. No router, no auth store, no login screen. `api/client.ts` still has an empty seam |
+| **No admin endpoint to create an invitation** | Invitations can only be created in code or by the seed. `POST /admin/invitations` is Phase 3 |
+| Login throttle and lockout are both 10 | They trip on the same attempt and the throttle answers first, so a locked-out user sees `429` for the rest of the window, then `403`. Both deny; only the message differs |
+| `require_permission` not written | Phase 3. No Phase 2 endpoint needs it |
+| Per-module 90% coverage not mechanically enforced | `coverage` has no per-module `fail_under`. The global gate is 80% and enforced; the auth files are measured at 92–99% and checked by reading the report |
+| Seed needed a UTF-8 stdout fix on Windows | `python -m app.scripts.seed` died with `UnicodeEncodeError` on a cp1252 console *after* writing rows, which looked like a data bug. The script now reconfigures its streams |
+
+### Next step
+
+1. **Outbox sweeper** — `workers/tasks_notifications.py`: claim with `SKIP LOCKED`, render, send, write `notification_deliveries`, honour the retryable/permanent split (`535` dead-letters immediately). Plus the beat entry. Without this nothing is delivered.
+2. **Frontend `features/auth/`** — router, auth store with the access token in memory only, `InvitationLanding`, `OtpVerify`, `Register`, `Login`, `ForgotPassword`, Hebrew RTL mobile-first.
+3. **`api/client.ts`** — attach `Authorization`, refresh-on-401 with a single-flight guard so concurrent 401s trigger exactly one refresh.
+4. **Playwright** — invite → OTP → register → login → refresh → logout in both locales.
 
 ---
 

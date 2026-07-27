@@ -1,0 +1,16 @@
+Hello {{ full_name }},
+
+Someone requested a password reset for your Kavim account.
+
+To set a new password:
+{{ reset_url }}
+
+This link is valid for {{ ttl_minutes }} minutes and can be used only once.
+
+Did not request this? Ignore this message — your current password remains valid.
+
+Note: completing a reset signs you out of every device.
+
+—
+Kavim
+This message was sent automatically. Please do not reply.

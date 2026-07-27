@@ -1,0 +1,11 @@
+Your Kavim verification code:
+
+{{ code }}
+
+The code is valid for {{ ttl_minutes }} minutes and can be used once.
+
+Did not request a code? Ignore this message. Never share the code with anyone, including someone claiming to be support staff.
+
+—
+Kavim
+This message was sent automatically. Please do not reply.

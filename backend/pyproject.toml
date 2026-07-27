@@ -142,6 +142,12 @@ filterwarnings = ["error::DeprecationWarning"]
 [tool.coverage.run]
 source = ["app"]
 omit = ["app/workers/beat_schedule.py", "*/__init__.py"]
+# Async SQLAlchemy runs database IO inside greenlets. Without declaring that,
+# coverage silently loses the trace there and reports code as unexecuted even
+# though its tests pass — `login` measured 38% while every one of its tests was
+# green. A misleading coverage number is worse than none, because it sends you
+# writing tests for paths that are already covered.
+concurrency = ["greenlet", "thread"]
 
 [tool.coverage.report]
 fail_under = 80

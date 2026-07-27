@@ -1,7 +1,4 @@
-"""Password hashing, token generation, and constant-time comparison.
-
-Phase 1 covers the primitives the seed script and Phase 2 both need. JWT
-encoding and the OTP/invitation service logic land in Phase 2 on top of these.
+"""Password hashing, token generation, JWTs, and constant-time comparison.
 
 Design rules, all from SPEC §8.3:
 
@@ -10,6 +7,9 @@ Design rules, all from SPEC §8.3:
 * Tokens and OTP codes: only a SHA-256 digest is stored. A database dump yields
   no usable invitation link, reset link, or session token.
 * Every secret comparison is constant time, so response timing leaks nothing.
+* JWTs are **access tokens only**. Refresh tokens are opaque random strings
+  looked up in the database, because a refresh token must be revocable and a
+  self-contained JWT cannot be revoked before it expires.
 """
 
 from __future__ import annotations
@@ -17,11 +17,16 @@ from __future__ import annotations
 import hashlib
 import secrets
 import unicodedata
+import uuid
+from datetime import datetime, timedelta
+from typing import Any, Final, Literal
 
+import jwt
 from argon2 import PasswordHasher
 from argon2.exceptions import InvalidHashError, VerifyMismatchError
 
 from app.core.config import settings
+from app.core.time import utc_now
 
 # Tuned for an interactive login: ~50-100 ms on a modern server. Memory cost is
 # the parameter that actually resists GPU cracking, so it carries the weight.
@@ -134,3 +139,135 @@ def hash_otp(code: str) -> str:
 def constant_time_compare(left: str, right: str) -> bool:
     """Use for every token, digest, and signature comparison."""
     return secrets.compare_digest(left.encode("utf-8"), right.encode("utf-8"))
+
+
+# ══════════════════════════════════════════════════════════════════════════
+#  JWT
+# ══════════════════════════════════════════════════════════════════════════
+# `scope` is what stops a token being used outside its purpose. A registration
+# ticket must not authenticate API calls, and an access token must not complete a
+# registration — so the scope is checked on decode, not merely present.
+TokenScope = Literal["access", "register"]
+
+SCOPE_ACCESS: Final[TokenScope] = "access"
+SCOPE_REGISTER: Final[TokenScope] = "register"
+
+ISSUER: Final = "kavim"
+
+
+class TokenError(Exception):
+    """A JWT that is malformed, expired, wrongly signed, or wrongly scoped.
+
+    One exception for every failure mode on purpose: the caller returns the same
+    401 regardless, and distinguishing "expired" from "bad signature" in a
+    response tells an attacker which of the two they achieved.
+    """
+
+
+def _encode(payload: dict[str, Any], ttl: timedelta) -> str:
+    now = utc_now()
+    claims: dict[str, Any] = {
+        **payload,
+        "iss": ISSUER,
+        "iat": int(now.timestamp()),
+        "exp": int((now + ttl).timestamp()),
+        # A unique id per token, so a specific one can be denylisted later
+        # without invalidating every token for that user.
+        "jti": uuid.uuid4().hex,
+    }
+    return jwt.encode(
+        claims,
+        settings.SECRET_KEY.get_secret_value(),
+        algorithm=settings.JWT_ALGORITHM,
+    )
+
+
+def _decode(token: str, *, expected_scope: TokenScope) -> dict[str, Any]:
+    try:
+        claims: dict[str, Any] = jwt.decode(
+            token,
+            settings.SECRET_KEY.get_secret_value(),
+            # A list, and `algorithms` is not optional: accepting the algorithm
+            # named in the token's own header is the classic "alg: none" forgery.
+            algorithms=[settings.JWT_ALGORITHM],
+            issuer=ISSUER,
+            options={"require": ["exp", "iat", "iss", "sub", "scope"]},
+        )
+    except jwt.PyJWTError as exc:
+        raise TokenError(str(exc)) from exc
+
+    if claims.get("scope") != expected_scope:
+        raise TokenError(f"expected scope {expected_scope}, got {claims.get('scope')!r}")
+    return claims
+
+
+def create_access_token(
+    user_id: uuid.UUID,
+    *,
+    email: str,
+    roles: list[str] | None = None,
+) -> str:
+    """Short-lived bearer token, held in memory by the client only (SPEC §8.2).
+
+    Roles are embedded for cheap UI gating, but they are **not** the
+    authorization decision — `require_permission` re-resolves from the database,
+    because a role revoked 30 seconds ago must not still work.
+    """
+    return _encode(
+        {"sub": str(user_id), "email": email, "roles": roles or [], "scope": SCOPE_ACCESS},
+        timedelta(minutes=settings.ACCESS_TOKEN_TTL_MINUTES),
+    )
+
+
+def decode_access_token(token: str) -> dict[str, Any]:
+    return _decode(token, expected_scope=SCOPE_ACCESS)
+
+
+def create_registration_ticket(invitation_id: uuid.UUID, email: str) -> str:
+    """Proof that this browser passed the OTP check, valid 15 minutes.
+
+    Carrying the invitation id rather than the raw invitation token is what lets
+    the flow stop resending that token: after OTP verification the raw token is
+    never transmitted again (SPEC §8.1). The email is carried too so registration
+    can bind the account to the invited address without trusting the form.
+    """
+    return _encode(
+        {"sub": str(invitation_id), "email": email, "scope": SCOPE_REGISTER},
+        timedelta(minutes=15),
+    )
+
+
+def decode_registration_ticket(token: str) -> tuple[uuid.UUID, str]:
+    """Returns ``(invitation_id, email)``."""
+    claims = _decode(token, expected_scope=SCOPE_REGISTER)
+    try:
+        invitation_id = uuid.UUID(str(claims["sub"]))
+    except (ValueError, KeyError) as exc:
+        raise TokenError("registration ticket carries no valid invitation id") from exc
+    email = str(claims.get("email") or "")
+    if not email:
+        raise TokenError("registration ticket carries no email")
+    return invitation_id, email
+
+
+# ══════════════════════════════════════════════════════════════════════════
+#  refresh tokens
+# ══════════════════════════════════════════════════════════════════════════
+def new_refresh_token() -> tuple[str, str]:
+    """Returns ``(raw_token, token_hash)``.
+
+    The raw value goes to the client in an httpOnly cookie and is never stored;
+    only the digest is persisted, so a database dump yields no usable session.
+    """
+    raw = generate_token()
+    return raw, hash_token(raw)
+
+
+def refresh_expiry(now: datetime | None = None) -> datetime:
+    return (now or utc_now()) + timedelta(days=settings.REFRESH_TOKEN_TTL_DAYS)
+
+
+def new_token_family() -> uuid.UUID:
+    """A fresh rotation chain. One family per login, shared by every rotation
+    descended from it, so reuse detection can revoke the whole chain at once."""
+    return uuid.uuid4()

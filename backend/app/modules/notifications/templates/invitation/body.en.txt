@@ -1,0 +1,15 @@
+Hello,
+
+{{ invited_by_name }} has invited you to join Kavim — production line quality review.
+Your assigned role: {{ role_label }}
+
+To complete your registration:
+{{ registration_url }}
+
+This link is valid until {{ expires_at_local }} and can be used only once.
+
+Did not expect this invitation? No action is needed — it will expire on its own.
+
+—
+Kavim
+This message was sent automatically. Please do not reply.

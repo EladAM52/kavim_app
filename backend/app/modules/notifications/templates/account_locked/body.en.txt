@@ -1,0 +1,19 @@
+Hello,
+
+{% if reason == 'failed_logins' %}
+Your Kavim account has been temporarily locked after several failed sign-in attempts.
+The lock lifts automatically in {{ minutes }} minutes.
+
+If this was you — wait and try again, or reset your password to sign in immediately.
+If this was not you — someone tried to guess your password. Changing it is advisable.
+{% else %}
+We detected a reused session token on your account, so every active session was revoked.
+
+This happens when a session token becomes available to someone else. You will need to
+sign in again. If you do not recognise this activity, change your password immediately
+and contact your system administrator.
+{% endif %}
+
+—
+Kavim
+This message was sent automatically. Please do not reply.

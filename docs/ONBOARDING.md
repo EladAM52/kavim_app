@@ -581,11 +581,11 @@ database now; they become usable once Phase 2 ships login.
 
 | Email | Role |
 |---|---|
-| `admin@kavim.local` | System admin |
-| `manager@kavim.local` | Line manager |
-| `supervisor@kavim.local` | Shift supervisor |
-| `worker1@kavim.local` … `worker3@kavim.local` | Worker |
-| `auditor@kavim.local` | Viewer / auditor |
+| `admin@kavim.example.com` | System admin |
+| `manager@kavim.example.com` | Line manager |
+| `supervisor@kavim.example.com` | Shift supervisor |
+| `worker1@kavim.example.com` … `worker3@kavim.example.com` | Worker |
+| `auditor@kavim.example.com` | Viewer / auditor |
 
 ### Troubleshooting
 

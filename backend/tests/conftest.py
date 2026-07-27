@@ -137,6 +137,91 @@ async def db(engine: AsyncEngine) -> AsyncGenerator[AsyncSession, None]:
 
 
 @pytest.fixture
+async def api(db: AsyncSession) -> AsyncGenerator[AsyncClient, None]:
+    """HTTP client whose requests run inside the test's transaction.
+
+    `get_db` is overridden to yield the *same* session the test holds, so a row
+    the test creates is visible to the endpoint and a row the endpoint creates is
+    visible to the test — and the whole thing is rolled back afterwards.
+
+    The override **mirrors `get_db`'s commit-on-success, rollback-on-exception
+    semantics**, and that is load-bearing rather than incidental. A fixture that
+    simply yields the session without either would have hidden three real bugs:
+    the failed-login counter, the account lock, and the refresh-reuse revocation
+    are all written and then followed by a raise, so under the real dependency
+    they were rolled back by the very error that recorded them. Tests can only
+    catch that if they roll back too.
+
+    This works inside the outer test transaction because the session joins it with
+    ``join_transaction_mode="create_savepoint"``: a `commit()` releases a savepoint
+    and opens a new one, so committed work survives a later `rollback()` exactly as
+    it would in production, and the outer rollback still discards all of it.
+
+    **Consequence for tests:** a rollback expires every ORM instance in the
+    session, so an object the test created before an error-returning request is
+    stale afterwards. Touching one of its attributes triggers a synchronous lazy
+    load and raises `MissingGreenlet`. Hold plain values (an email string, a UUID)
+    across request boundaries, or `await db.refresh(obj)` before reading again.
+    """
+    from app.core.database import get_db
+    from app.main import create_app
+
+    app = create_app()
+
+    async def _override_get_db() -> AsyncGenerator[AsyncSession, None]:
+        try:
+            yield db
+            await db.commit()
+        except Exception:
+            await db.rollback()
+            raise
+
+    app.dependency_overrides[get_db] = _override_get_db
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        yield client
+
+    app.dependency_overrides.clear()
+
+
+@pytest.fixture(autouse=True)
+def rate_limit_counters(monkeypatch: pytest.MonkeyPatch) -> dict[str, int]:
+    """Point rate limiting at a per-test in-memory counter.
+
+    Without this every test shares whatever Redis is on the machine, so a suite
+    run twice inside 15 minutes starts failing on quotas — and the tests that
+    deliberately exhaust a limit would leak into unrelated ones.
+
+    Autouse *and* requestable: the returned dict is the live counter state, so a
+    test that needs to isolate one control from another can clear it. Handy
+    because SPEC §8.3 sets the login throttle and the lockout threshold to the
+    same number, so the throttle answers first and hides the lock.
+    """
+    from app.core import rate_limit
+
+    counters: dict[str, int] = {}
+
+    async def _fake_consume(limit: rate_limit.Limit, identifier: str) -> rate_limit.LimitResult:
+        key = f"{limit.name}:{identifier.lower()}"
+        counters[key] = counters.get(key, 0) + 1
+        used = counters[key]
+        return rate_limit.LimitResult(
+            allowed=used <= limit.max_events,
+            used=used,
+            limit=limit.max_events,
+            retry_after_seconds=limit.window_seconds if used > limit.max_events else 0,
+        )
+
+    async def _fake_reset(limit: rate_limit.Limit, identifier: str) -> None:
+        counters.pop(f"{limit.name}:{identifier.lower()}", None)
+
+    monkeypatch.setattr(rate_limit, "consume", _fake_consume)
+    monkeypatch.setattr(rate_limit, "reset", _fake_reset)
+    return counters
+
+
+@pytest.fixture
 async def seeded_reference(db: AsyncSession) -> dict[str, object]:
     """Roles and permissions, as the real seed script creates them.
 

@@ -5,9 +5,9 @@
 ; boundaries decay within weeks; with them, any module stays extractable into
 ; its own service later without rewriting call sites.
 ;
-; PHASE NOTE: the "no cross-module router imports" contract is added in Phase 2,
-; once the first routers exist — import-linter errors on modules that are not
-; yet present.
+; The "no cross-module router imports" contract at the bottom was deferred until
+; Phase 2, because import-linter errors on modules that do not exist yet. The
+; routers now exist, so it is enforced.
 
 [importlinter]
 root_package = app
@@ -67,3 +67,21 @@ forbidden_modules =
     aiosmtplib
     smtplib
     boto3
+
+; ── one module never reaches into another's HTTP layer ────────────────────
+; A router is a module's edge, not its API. Calling another module's router means
+; coupling to its request/response shapes, its dependencies, and its status codes
+; — and it is how a modular monolith quietly becomes unextractable.
+; Cross-module calls go through `service.py`. `main.py` is the only importer of
+; routers, and it is not a module.
+[importlinter:contract:no-cross-module-routers]
+name = modules must not import each other's routers
+type = forbidden
+source_modules =
+    app.modules.auth
+    app.modules.audit
+    app.modules.notifications
+forbidden_modules =
+    app.modules.auth.router
+    app.modules.audit.router
+    app.modules.notifications.router
