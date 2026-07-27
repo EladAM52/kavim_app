@@ -27,9 +27,10 @@ dependencies = [
     # ── observability ─────────────────────────────────────────────────────
     "structlog>=24.4",
     # ── integrations (SPEC §6.14 — imported only from app/integrations/) ──
-    "sendgrid>=6.11",
-    "twilio>=9.4",
+    "aiosmtplib>=3.0",
     "boto3>=1.35",
+    # ── templating (email bodies, he + en, rendered locally per ADR-007) ──
+    "jinja2>=3.1",
     # ── media / export ────────────────────────────────────────────────────
     "pillow>=11.0",
     "openpyxl>=3.1",
@@ -43,6 +44,9 @@ dev = [
     "httpx>=0.28",
     "testcontainers[postgres]>=4.9",
     "factory-boy>=3.3",
+    # In-process SMTP sink, so the real client is contract-tested without a socket
+    # to Gmail (SPEC §11).
+    "aiosmtpd>=1.4",
     "ruff>=0.8",
     "mypy>=1.13",
     "import-linter>=2.1",
@@ -108,7 +112,7 @@ plugins = ["pydantic.mypy"]
 exclude = ["alembic/versions/"]
 
 [[tool.mypy.overrides]]
-module = ["celery.*", "sendgrid.*", "twilio.*", "testcontainers.*", "factory.*"]
+module = ["celery.*", "testcontainers.*", "factory.*", "aiosmtpd.*"]
 ignore_missing_imports = true
 
 # Celery's signal and task decorators are untyped, so strict mode flags every

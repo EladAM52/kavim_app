@@ -11,7 +11,7 @@ Hebrew RTL first, English second. Fully responsive — a card list on mobile, a 
 | Backend | FastAPI · Python 3.12 · SQLAlchemy 2.0 async · Celery |
 | Frontend | React 19 · TypeScript · Vite · Tailwind CSS v4 |
 | Data | PostgreSQL 16 · Redis 7 |
-| Notifications | SendGrid (email) · Twilio (SMS) |
+| Notifications | Gmail SMTP (email) · in-app · SMS deferred |
 
 ## Documentation
 

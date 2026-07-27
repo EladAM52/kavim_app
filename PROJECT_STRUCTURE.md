@@ -123,7 +123,9 @@ kavim/                                      # repo root
 │   │   │   │   ├── router.py               # in-app feed, read state
 │   │   │   │   ├── service.py              # recipient resolution, preference filter
 │   │   │   │   ├── outbox.py               # write, claim (SKIP LOCKED), dispatch, retry
-│   │   │   │   ├── webhooks.py             # SendGrid + Twilio, signature-verified
+│   │   │   │   ├── quota.py                # rolling 24h recipient count vs the
+│   │   │   │   │                           # Gmail ceiling; prioritizes OTP and
+│   │   │   │   │                           # invitations over digests (FR-714)
 │   │   │   │   └── templates/
 │   │   │   │       ├── invitation/         # subject.he.txt  body.he.html  (+ .en)
 │   │   │   │       ├── task_assigned/
@@ -149,8 +151,10 @@ kavim/                                      # repo root
 │   │   │       └── exporters.py            # CSV (UTF-8 BOM) + XLSX (RTL sheets)
 │   │   │
 │   │   ├── integrations/                   # SPEC §6.14 — the only place external SDKs appear
-│   │   │   ├── sendgrid_client.py
-│   │   │   ├── twilio_client.py
+│   │   │   ├── email.py                    # EmailSender protocol + message type;
+│   │   │   │                               # modules/ depends on THIS, not on SMTP
+│   │   │   ├── smtp_client.py              # Gmail: aiosmtplib, STARTTLS:587,
+│   │   │   │                               # App Password, dry-run, error mapping
 │   │   │   └── storage.py                  # local disk (dev) | S3-compatible (prod)
 │   │   │
 │   │   ├── workers/                        # SPEC §6.13
@@ -358,7 +362,7 @@ Each step depends on the one before it. Following this order means nothing is ev
 | Permission strings | `resource:action[:qualifier]` | `task:update:status` |
 | API routes | plural nouns, kebab-case paths | `/api/v1/projects/{id}/columns` |
 | WebSocket events | `entity.past_tense` | `cell.changed` |
-| Env vars | `SCREAMING_SNAKE_CASE` | `SENDGRID_TEMPLATE_INVITATION` |
+| Env vars | `SCREAMING_SNAKE_CASE` | `EMAIL_DAILY_QUOTA` |
 | Branches | `type/short-description` | `feat/column-engine` |
 | Commits | Conventional Commits | `feat(tasks): add fractional index reordering` |
 

@@ -181,7 +181,7 @@ class ServiceUnavailableError(AppError):
 
 
 class ProviderError(ServiceUnavailableError):
-    """An external provider (SendGrid, Twilio, storage) failed."""
+    """An external provider (SMTP relay, object storage) failed."""
 
     code = "provider_error"
     title = "External provider unavailable"

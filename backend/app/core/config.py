@@ -90,27 +90,29 @@ class Settings(BaseSettings):
     # ── CORS (development only; production is single-origin) ──────────────
     CORS_ORIGINS: CsvList = Field(default_factory=list)
 
-    # ── SendGrid ──────────────────────────────────────────────────────────
-    SENDGRID_ENABLED: bool = False
-    SENDGRID_SANDBOX: bool = True
-    SENDGRID_API_KEY: SecretStr = SecretStr("")
-    SENDGRID_FROM_EMAIL: str = "no-reply@example.com"
-    SENDGRID_FROM_NAME: str = "Kavim"
-    SENDGRID_WEBHOOK_KEY: SecretStr = SecretStr("")
-    SENDGRID_TEMPLATE_INVITATION: str = ""
-    SENDGRID_TEMPLATE_OTP: str = ""
-    SENDGRID_TEMPLATE_PASSWORD_RESET: str = ""
-    SENDGRID_TEMPLATE_TASK_ASSIGNED: str = ""
-    SENDGRID_TEMPLATE_MENTION: str = ""
-    SENDGRID_TEMPLATE_OVERDUE: str = ""
-    SENDGRID_TEMPLATE_DIGEST: str = ""
+    # ── email / SMTP (ADR-007) ────────────────────────────────────────────
+    # Gmail via authenticated SMTP. SMTP_PASSWORD is a Google **App Password**
+    # (16 characters, 2-step verification required on the account), never the
+    # account password.
+    EMAIL_ENABLED: bool = False
+    EMAIL_DRY_RUN: bool = True
+    SMTP_HOST: str = "smtp.gmail.com"
+    SMTP_PORT: int = 587
+    SMTP_USERNAME: str = ""
+    SMTP_PASSWORD: SecretStr = SecretStr("")
+    SMTP_STARTTLS: bool = True
+    SMTP_USE_TLS: bool = False
+    SMTP_TIMEOUT_SECONDS: int = 30
+    EMAIL_FROM_ADDRESS: str = ""
+    EMAIL_FROM_NAME: str = "Kavim"
+    EMAIL_REPLY_TO: str = ""
+    # Free Gmail sends ~500 recipients/day; Workspace ~2000. Exceeding it
+    # suspends sending for 24 hours, so the outbox meters against this (FR-714).
+    EMAIL_DAILY_QUOTA: int = 500
 
-    # ── Twilio ────────────────────────────────────────────────────────────
-    TWILIO_ENABLED: bool = False
-    TWILIO_ACCOUNT_SID: str = ""
-    TWILIO_AUTH_TOKEN: SecretStr = SecretStr("")
-    TWILIO_FROM_NUMBER: str = ""
-    TWILIO_STATUS_CALLBACK_URL: str = ""
+    # ── SMS ───────────────────────────────────────────────────────────────
+    # Deferred (SPEC §6.14.1). No provider, no settings. NotificationChannel.SMS
+    # and the schema stay put, so adding one later needs no migration.
 
     # ── storage ───────────────────────────────────────────────────────────
     STORAGE_BACKEND: Literal["local", "s3"] = "local"
@@ -140,6 +142,49 @@ class Settings(BaseSettings):
         path = Path(self.STORAGE_LOCAL_PATH)
         return path if path.is_absolute() else (BACKEND_DIR / path).resolve()
 
+    @property
+    def email_from_address(self) -> str:
+        """The envelope sender.
+
+        Defaults to ``SMTP_USERNAME`` because on free Gmail the two must match:
+        Gmail rewrites a ``From`` it has not authorized, so a mismatch does not
+        error — it silently sends from the wrong address, which is worse.
+        """
+        return self.EMAIL_FROM_ADDRESS or self.SMTP_USERNAME
+
+    @property
+    def is_gmail_smtp(self) -> bool:
+        return self.SMTP_HOST.endswith("gmail.com")
+
+    @model_validator(mode="after")
+    def _guard_email(self) -> Settings:
+        """Email settings that are wrong in *every* environment.
+
+        Checked unconditionally, unlike the production guard below, because a
+        misconfigured transport fails at first send — which for OTP means at the
+        moment a user is locked out, not at startup.
+        """
+        if self.SMTP_STARTTLS and self.SMTP_USE_TLS:
+            raise ValueError(
+                "SMTP_STARTTLS and SMTP_USE_TLS are mutually exclusive: "
+                "use STARTTLS on port 587 or implicit TLS on port 465, not both"
+            )
+        if self.EMAIL_ENABLED and not self.EMAIL_DRY_RUN:
+            if not self.SMTP_USERNAME:
+                raise ValueError("SMTP_USERNAME is required when EMAIL_ENABLED and not dry-run")
+            if not self.SMTP_PASSWORD.get_secret_value():
+                raise ValueError(
+                    "SMTP_PASSWORD is required when EMAIL_ENABLED and not dry-run "
+                    "(Gmail: a 16-character App Password, not the account password)"
+                )
+            # Free Gmail rewrites an unauthorized From rather than rejecting it.
+            if self.is_gmail_smtp and self.email_from_address != self.SMTP_USERNAME:
+                raise ValueError(
+                    f"EMAIL_FROM_ADDRESS ({self.email_from_address}) must equal SMTP_USERNAME "
+                    f"({self.SMTP_USERNAME}) on Gmail — Gmail silently rewrites any other sender"
+                )
+        return self
+
     @model_validator(mode="after")
     def _guard_production(self) -> Settings:
         """Refuse to start production with development-grade settings.
@@ -162,8 +207,15 @@ class Settings(BaseSettings):
             problems.append("DATABASE_ECHO must be false in production (it logs query values)")
         if self.APP_BASE_URL.startswith("http://"):
             problems.append("APP_BASE_URL must use https in production")
-        if self.SENDGRID_ENABLED and self.SENDGRID_SANDBOX:
-            problems.append("SENDGRID_SANDBOX must be false in production — no mail is sent")
+        if self.EMAIL_DRY_RUN:
+            problems.append("EMAIL_DRY_RUN must be false in production — no mail is sent")
+        if not self.EMAIL_ENABLED:
+            problems.append(
+                "EMAIL_ENABLED must be true in production — invitations and OTP codes "
+                "cannot be delivered otherwise"
+            )
+        if not (self.SMTP_STARTTLS or self.SMTP_USE_TLS):
+            problems.append("SMTP must use STARTTLS or implicit TLS; plaintext submission")
         if self.STORAGE_BACKEND == "local":
             problems.append("STORAGE_BACKEND=local is not durable; use s3 in production")
 

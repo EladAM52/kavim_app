@@ -25,7 +25,7 @@ Running record of what has been built, what was decided, what broke, and what mu
 | 4 | Projects, groups, column engine | ⬜ |
 | 5 | Tasks, subtasks, cell editing, drag-drop | ⬜ |
 | 6 | Comments, attachments, WebSocket live updates | ⬜ |
-| 7 | Notifications: SendGrid + Twilio + preferences | ⬜ Blocked on provider setup (see below) |
+| 7 | Notifications: Gmail SMTP + preferences + quota accounting. SMS deferred | ⬜ |
 | 8 | Mobile card view, PWA, reports, RTL polish | ⬜ |
 
 ---
@@ -83,7 +83,7 @@ Verified toolchain: Docker 29.6.2 (WSL 2 backend, 16 CPUs, 11.5 GB), Compose v5.
 
 | Module | Notes |
 |---|---|
-| `config.py` | Typed `pydantic-settings`. A production-grade guard refuses to start if `SECRET_KEY` is the placeholder or under 32 chars, `APP_DEBUG` or `DATABASE_ECHO` is on, `APP_BASE_URL` is plaintext HTTP, SendGrid is enabled while still in sandbox, or storage is `local` |
+| `config.py` | Typed `pydantic-settings`. A production-grade guard refuses to start if `SECRET_KEY` is the placeholder or under 32 chars, `APP_DEBUG` or `DATABASE_ECHO` is on, `APP_BASE_URL` is plaintext HTTP, SendGrid is enabled while still in sandbox, or storage is `local`. *(The SendGrid clause was replaced by the email guards in session 4.)* |
 | `database.py` | Async engine, `pool_pre_ping`, `pool_recycle`, `statement_cache_size=0` for pooler compatibility. `get_db` commits on clean return and rolls back on any exception — the mechanism behind the "domain change, history row, audit row, and outbox row all commit together" guarantee |
 | `redis.py` | Pooled client plus cache helpers that fail soft: Redis being down degrades performance, never correctness. `cache_delete_prefix` uses `SCAN`, not `KEYS` |
 | `logging.py` | structlog, JSON in production, `request_id`/`user_id` contextvars on every line |
@@ -350,14 +350,97 @@ restart before debugging the code.
 
 ---
 
+## Session 4 — 2026-07-27 · Email moves to Gmail SMTP; SMS deferred
+
+Architecture change, decided by the user. Recorded as **ADR-007** in `SPEC.md` §15.
+
+### The decision
+
+| | Before | After |
+|---|---|---|
+| Email | SendGrid API, hosted dynamic templates, delivery webhooks | Authenticated SMTP to `smtp.gmail.com:587` as `kavimsupport@gmail.com`, Jinja2 templates in git, no webhooks |
+| SMS | Twilio, Israeli sender registration pending | **Deferred.** No provider. Schema and enums unchanged |
+
+**Why:** the pilot is one line and under 50 workers. SendGrid's advantages — a raised ceiling,
+delivery webhooks, hosted templates — are all things the pilot does not need, and domain
+authentication (SPF + DKIM) needed IT and was sitting on the critical path for testing the auth
+flow. An App Password takes two minutes. Twilio was worse: regulated multi-day sender
+registration for a channel with no identified requirement yet.
+
+### What this costs, recorded so nobody rediscovers it later
+
+- **~500 recipients/day**, hard. Exceeding it suspends sending for 24 hours, which would take
+  OTP and invitation mail down with it. Answered by FR-714 quota accounting with
+  prioritization, not by hoping.
+- **No delivery or bounce webhooks.** `notification_deliveries.status` now means "the relay
+  accepted it", not "the inbox received it" (FR-713). Bounces arrive as mail to
+  `kavimsupport@gmail.com` and are not ingested.
+- **`From` is locked to the Gmail account.** Free Gmail rewrites anything else *silently*
+  rather than rejecting it, so `no-reply@kavim.local` is unavailable and mail visibly comes
+  from `@gmail.com` — which corporate spam filters treat with suspicion (R13). Test against
+  the plant's real mail domain early, not at pilot.
+
+One thing got *better*: templates move from hosted SendGrid dynamic templates into
+`modules/notifications/templates/`, so copy changes are reviewed in a pull request, they diff,
+and they cannot drift between environments.
+
+### Delivered
+
+| Area | Change |
+|---|---|
+| `SPEC.md` | FR-701 rewritten; FR-702/711/112 marked `WON'T (this release)`; FR-706 quiet hours now cover email; **FR-713** (delivery-reporting limits) and **FR-714** (quota) added; NFR-21 recosted; architecture diagram, notification pipeline, and auth failure modes updated; §6.14 rewritten around the `EmailSender` seam with new §6.14.1 recording exactly what SMS keeps; webhook routes and phone-verification routes marked deferred; §12.1 env table replaced; roadmap Phases 2 and 7 restated; risks R2/R3 replaced and R13/R14 added; **ADR-007** written |
+| `core/config.py` | 13 `SENDGRID_*` and 5 `TWILIO_*` settings replaced by 13 `EMAIL_*`/`SMTP_*` ones. New `_guard_email` validator, plus `email_from_address` and `is_gmail_smtp` derived properties |
+| `.env.example` | New email block with step-by-step App Password instructions; SMS block reduced to a pointer at §6.14.1 |
+| `pyproject.toml` | `sendgrid` and `twilio` out; `aiosmtplib` and `jinja2` in; `aiosmtpd` added as a dev dependency for the in-process SMTP sink |
+| `.importlinter` | `sdk-containment` now forbids `aiosmtplib`, `smtplib`, `boto3` outside `integrations/` |
+| `CLAUDE.md`, `PROJECT_STRUCTURE.md`, both `README.md`s, `ONBOARDING.md` | Provider references updated; `integrations/` tree now shows `email.py` + `smtp_client.py`; `notifications/quota.py` added to the planned tree |
+
+### Design decisions made during implementation
+
+| Decision | Reasoning |
+|---|---|
+| **Two files, not one: `integrations/email.py` + `smtp_client.py`** | `modules/` depends on the `EmailSender` protocol and has no idea SMTP exists. Swapping providers is the only route back to real delivery tracking, so the seam is load-bearing rather than speculative |
+| **`smtplib` is forbidden outside `integrations/`, not just `aiosmtplib`** | Being in the standard library makes it easier to reach for absent-mindedly, not more acceptable |
+| **`_guard_email` runs in every environment, not only production** | A broken transport fails at first send. For OTP that is the moment a user is already locked out and waiting — far too late to discover a missing App Password |
+| **Gmail `From`/username mismatch is a hard error** | Gmail does not reject an unauthorized sender, it substitutes its own. A silent wrong-sender is worse than a startup failure, and this is the only place it can be caught |
+| **`535` is non-retryable** | A revoked App Password will not fix itself. Five backed-off attempts turn a visible outage into a quiet one |
+| **SMS enums and columns stay** | `NotificationChannel.SMS` generates a `CHECK` constraint. Removing it means a migration now and another one later. Keeping it means adding SMS costs no schema change at all |
+
+### Verification evidence
+
+```
+uv sync        - sendgrid, - twilio, + aiosmtplib, + aiosmtpd, + jinja2
+ruff           All checks passed!
+ruff format    42 files already formatted
+mypy --strict  Success: no issues found in 34 source files
+import-linter  Contracts: 4 kept, 0 broken
+pytest         61 passed          (was 54; +7 email config tests)
+```
+
+The seven new tests cover both guards: STARTTLS and implicit TLS are mutually exclusive,
+sending without a password is rejected, a Gmail `From` mismatch is rejected, the `From` falls
+back to `SMTP_USERNAME`, dry-run needs no credentials, and production rejects
+`EMAIL_DRY_RUN=true`, `EMAIL_ENABLED=false`, and plaintext submission.
+
+### Not built yet — deliberately
+
+The integration files themselves (`email.py`, `smtp_client.py`, the templates, `quota.py`) are
+**Phase 2 work**, listed in the "Next step" section. This session changed the contract, the
+configuration, the dependencies, and the boundary rules — the decisions that are expensive to
+reverse once code is written against them. Writing the client before the contract settled is
+the sequence that produces rework.
+
+---
+
 ## Blocked / awaiting external action
 
 These have lead times and are **not** blocked on development. Starting them now keeps them off the critical path.
 
 | # | Item | Blocks | Owner | Notes |
 |---|---|---|---|---|
-| E1 | **SendGrid account + domain authentication** (SPF + DKIM DNS records) | Phase 7; full email testing in Phase 2 | User + IT | The DNS step needs IT and takes days. Development is unblocked meanwhile because `SENDGRID_SANDBOX=true` sends nothing |
-| E2 | **Twilio account + Israeli sender registration** | Phase 7 SMS | User | Regulated; multi-day. Test credentials work immediately for development |
+| E1 | **Gmail App Password** for `kavimsupport@gmail.com` | Real sending in Phase 2; nothing before that | User | ~2 minutes: enable 2-step verification, then <https://myaccount.google.com/apppasswords>. Development is unblocked meanwhile because `EMAIL_DRY_RUN=true` renders and logs without connecting. **Paste it into `.env`, never into a committed file** |
+| E1b | **Deliverability check against the plant's real mail domain** | Phase 2 acceptance | User | Send one invitation to a real work address early and confirm it does not land in spam. A `@gmail.com` sender to a corporate domain is the risk (SPEC R13). Finding this at pilot instead of now is the expensive version |
+| ~~E2~~ | ~~Twilio account + Israeli sender registration~~ | — | — | **Dropped.** SMS deferred, no provider integrated (SPEC §6.14.1, ADR-007) |
 | E3 | Decision: is **Entra ID SSO** expected within 12 months? | Phase 2 design | User | Changes how much to invest in the password flow. The model keeps `auth_provider` / `external_idp_id` either way |
 | E4 | Decision: required **retention period for quality records** | Audit and soft-delete design | User + QA/compliance | Currently assumed 24 months |
 | E5 | **Existing quality checklists or forms** (photo or Excel of a real one) | Phase 4 default column set and templates | User | Highest-value input available. Turns generic templates into ones that are immediately useful |
@@ -368,18 +451,21 @@ These have lead times and are **not** blocked on development. Starting them now 
 
 ## Next step — Phase 2: Authentication
 
-Nothing external blocks this. SendGrid runs in sandbox mode, so the full flow is
-testable without a verified sender domain (E1).
+Nothing external blocks this. Email defaults to `EMAIL_DRY_RUN=true`, which renders each
+message and logs it without opening a connection, so the whole flow is testable before the
+App Password exists (E1).
 
 **To do**
 
-1. Commit and push Phase 0 + Phase 1 (see the gap table above — nothing since `45224b9`).
+1. ~~Commit and push Phase 0 + Phase 1~~ — done, `fb83fd9`.
 2. `core/security.py` additions: JWT encode/decode, the short-lived `registration_ticket`, refresh-token rotation helpers.
 3. `core/rate_limit.py` — Redis token bucket: login 10 per 15 min per IP *and* per email, OTP verify 5 per code, OTP request 3 per 15 min per email.
 4. `schemas/auth.py` — Pydantic request/response models; these become the OpenAPI contract the frontend types are generated from.
 5. `modules/auth/` — `invitations.py`, `otp.py`, `passwords.py`, `service.py`, `router.py`. The exact flow is specified in `SPEC.md` §8.1 and must be followed step for step: the registration email comes from the invitation row, never from the submitted form, and the OTP goes to the invited address.
 6. Refresh rotation with **reuse detection** — presenting an already-rotated token revokes the whole `family_id` and emails the user.
-7. `integrations/sendgrid_client.py` with sandbox mode, plus the outbox row written in the same transaction as the invitation.
+7. `integrations/email.py` (the `EmailSender` protocol and message type) and `integrations/smtp_client.py` (aiosmtplib, STARTTLS on 587, App Password, dry-run, SMTP status-code → typed error mapping). Plus the outbox row written in the same transaction as the invitation. `modules/auth/` depends on the protocol, never on the SMTP client — that seam is what makes a provider swap cheap (ADR-007).
+   - Templates: `modules/notifications/templates/{invitation,otp_code}/` with `he` and `en` subject + body, rendered with Jinja2. Hebrew bodies need `Content-Type: text/html; charset=utf-8` and RTL markup in the HTML part.
+   - `535` (bad App Password) is **not** retryable — dead-letter it and alert, rather than burning five attempts on a credential that will not fix itself.
 8. Add the cross-module router contract to `.importlinter`, and turn on the coverage gate (90% on `auth`).
 9. Frontend `features/auth/`: `InvitationLanding`, `OtpVerify`, `Register`, `Login`, `ForgotPassword` — Hebrew RTL, mobile-first.
 10. Attach the `Authorization` header and refresh-on-401 at the marked seam in `api/client.ts`, with a single-flight guard so concurrent 401s trigger exactly one refresh.

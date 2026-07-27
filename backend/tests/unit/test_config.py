@@ -19,8 +19,11 @@ def _prod(**overrides: object) -> dict[str, object]:
         "APP_BASE_URL": "https://kavim.example.com",
         "SECRET_KEY": "x" * 48,
         "STORAGE_BACKEND": "s3",
-        "SENDGRID_ENABLED": False,
-        "SENDGRID_SANDBOX": True,
+        "EMAIL_ENABLED": True,
+        "EMAIL_DRY_RUN": False,
+        "SMTP_USERNAME": "kavimsupport@gmail.com",
+        "SMTP_PASSWORD": "app-password-16ch",
+        "EMAIL_FROM_ADDRESS": "kavimsupport@gmail.com",
         # Ignore any .env present on the machine running the tests.
         "_env_file": None,
     }
@@ -43,7 +46,9 @@ def test_valid_production_config_is_accepted() -> None:
         ({"DATABASE_ECHO": True}, "DATABASE_ECHO"),
         ({"APP_BASE_URL": "http://kavim.example.com"}, "https"),
         ({"STORAGE_BACKEND": "local"}, "not durable"),
-        ({"SENDGRID_ENABLED": True, "SENDGRID_SANDBOX": True}, "SANDBOX"),
+        ({"EMAIL_DRY_RUN": True}, "EMAIL_DRY_RUN"),
+        ({"EMAIL_ENABLED": False}, "EMAIL_ENABLED"),
+        ({"SMTP_STARTTLS": False, "SMTP_USE_TLS": False}, "plaintext"),
     ],
 )
 def test_production_rejects_unsafe_config(
@@ -51,6 +56,52 @@ def test_production_rejects_unsafe_config(
 ) -> None:
     with pytest.raises(ValueError, match=expected_fragment):
         Settings(**_prod(**overrides))  # type: ignore[arg-type]
+
+
+# ══════════════════════════════════════════════════════════════════════════
+#  email transport — checked in every environment, not just production
+# ══════════════════════════════════════════════════════════════════════════
+def test_starttls_and_implicit_tls_are_mutually_exclusive() -> None:
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        Settings(SMTP_STARTTLS=True, SMTP_USE_TLS=True, _env_file=None)  # type: ignore[call-arg]
+
+
+def test_sending_without_a_password_is_rejected() -> None:
+    """Caught at startup rather than at the first OTP send, which is the moment
+    a user is already locked out and waiting."""
+    with pytest.raises(ValueError, match="SMTP_PASSWORD"):
+        Settings(  # type: ignore[call-arg]
+            EMAIL_ENABLED=True,
+            EMAIL_DRY_RUN=False,
+            SMTP_USERNAME="kavimsupport@gmail.com",
+            SMTP_PASSWORD="",
+            _env_file=None,
+        )
+
+
+def test_gmail_rejects_a_from_address_it_would_rewrite() -> None:
+    """Gmail does not error on an unauthorized From — it silently substitutes
+    its own, so the mismatch has to be caught here or not at all."""
+    with pytest.raises(ValueError, match="silently rewrites"):
+        Settings(  # type: ignore[call-arg]
+            EMAIL_ENABLED=True,
+            EMAIL_DRY_RUN=False,
+            SMTP_USERNAME="kavimsupport@gmail.com",
+            SMTP_PASSWORD="app-password-16ch",
+            EMAIL_FROM_ADDRESS="no-reply@kavim.local",
+            _env_file=None,
+        )
+
+
+def test_from_address_falls_back_to_the_smtp_username() -> None:
+    settings = Settings(SMTP_USERNAME="kavimsupport@gmail.com", _env_file=None)  # type: ignore[call-arg]
+    assert settings.email_from_address == "kavimsupport@gmail.com"
+
+
+def test_dry_run_needs_no_credentials() -> None:
+    """The development default: no App Password, no connection, no friction."""
+    settings = Settings(EMAIL_ENABLED=True, EMAIL_DRY_RUN=True, _env_file=None)  # type: ignore[call-arg]
+    assert settings.EMAIL_DRY_RUN
 
 
 def test_development_allows_placeholder_secret() -> None:

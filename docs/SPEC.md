@@ -120,7 +120,7 @@ Each requirement: `FR-###`, actor, statement, acceptance criteria, priority (**M
 | FR-109 | System | Lock an account after repeated failed logins | 10 consecutive failures locks the account for 15 minutes; the lock event is audited and the user is emailed | MUST |
 | FR-110 | User | Log out, and optionally log out of all devices | Refresh token family revoked; WebSocket connections closed | MUST |
 | FR-111 | Manager, Admin | Resend or revoke a pending invitation | Resend issues a new token and invalidates the old one; revoke sets status `revoked` | SHOULD |
-| FR-112 | User | Verify the phone number via SMS code, enabling SMS notifications | Twilio-delivered code; `phone_verified_at` set; unverified phones never receive notifications | SHOULD |
+| FR-112 | User | Verify the phone number via SMS code, enabling SMS notifications | Deferred with FR-702 — no SMS provider is integrated. `users.phone` and `phone_verified_at` remain, so numbers can be collected now and verified when there is something to verify them for | WON'T (this release) |
 | FR-113 | User | Choose interface language (Hebrew / English) at registration and change it later | Selection persists per user and drives both UI language and outbound email/SMS language | MUST |
 
 ### FR-2xx — Authorization and Admin Panel
@@ -195,18 +195,20 @@ Each requirement: `FR-###`, actor, statement, acceptance criteria, priority (**M
 
 | ID | Actor | Requirement | Acceptance criteria | Pri |
 |---|---|---|---|---|
-| FR-701 | System | Send email via SendGrid | Localized template per user language; delivery status recorded | MUST |
-| FR-702 | System | Send SMS via Twilio | Only to verified phones; E.164 normalized; body under 160 GSM-7 characters where possible | MUST |
+| FR-701 | System | Send email via authenticated SMTP (Gmail) | Locally rendered template per user language; the SMTP acceptance response is recorded against the delivery row | MUST |
+| FR-702 | System | Send SMS | **Deferred — see §6.14.1.** No provider is integrated. The `sms` channel value, the preference matrix column, and the delivery table all remain, so implementing it later needs no schema change | WON'T (this release) |
 | FR-703 | System | Show in-app notifications with an unread badge | Delivered over WebSocket; marking read syncs across the user's devices | MUST |
 | FR-704 | System | Trigger notifications on: invitation, assignment, mention, status change on a followed task, due-date reminder, overdue, comment on assigned task, project shared | Each trigger is independently toggleable per user per channel | MUST |
-| FR-705 | User | Configure a notification preference matrix: event × channel (email / SMS / in-app) | Defaults are sensible: assignment and mention on all channels, status change in-app only | MUST |
-| FR-706 | User | Set quiet hours during which no SMS is sent | Non-urgent messages are deferred to the end of quiet hours; escalations bypass | SHOULD |
+| FR-705 | User | Configure a notification preference matrix: event × channel (email / SMS / in-app) | Defaults are sensible: assignment and mention on all channels, status change in-app only. The SMS column renders disabled with a "not yet available" hint while FR-702 is deferred | MUST |
+| FR-706 | User | Set quiet hours during which no email or SMS is sent | Non-urgent messages are deferred to the end of quiet hours; escalations bypass. Applies to email as well as SMS — a 03:00 assignment mail is as unwelcome as a text | SHOULD |
 | FR-707 | User | Receive one daily digest email instead of individual messages | Per-user opt-in; sent at a configurable hour in `Asia/Jerusalem` | SHOULD |
 | FR-708 | System | Escalate an overdue task to the line manager | Hourly scan; escalates once per task per 24 hours to avoid alert fatigue | SHOULD |
 | FR-709 | System | Never lose a notification because of a crash between the database commit and the queue enqueue | Transactional outbox: the notification row is written in the same transaction as the domain change and swept by a worker | MUST |
 | FR-710 | System | Retry failed deliveries and stop cleanly after exhausting retries | Exponential backoff, max 5 attempts, then a dead-letter row visible to admins | MUST |
-| FR-711 | System | Handle SMS opt-out | An inbound `STOP` disables SMS for that number and is recorded | MUST |
-| FR-712 | Admin | See a delivery log: recipient, channel, event, status, provider message id, error | Filterable, retryable per row | SHOULD |
+| FR-711 | System | Handle SMS opt-out | Deferred with FR-702. An inbound `STOP` must disable SMS for that number and be recorded, whenever SMS is implemented | WON'T (this release) |
+| FR-712 | Admin | See a delivery log: recipient, channel, event, status, provider message id, error | Filterable, retryable per row. Over SMTP the recorded status is *accepted by the relay*, not *delivered to the inbox* — see FR-713 | SHOULD |
+| FR-713 | Admin | Understand the limits of SMTP delivery reporting | The delivery log states plainly that email status means "the relay accepted it". Bounces and spam reports arrive as mail to the sending mailbox and are not ingested automatically. An admin runbook covers checking that mailbox | MUST |
+| FR-714 | System | Stay inside the Gmail sending quota | Roughly 500 recipients per day on a free Gmail account. The outbox counts recipients per rolling 24 hours, logs a warning past 80%, and defers non-urgent mail rather than burning quota that an OTP or invitation will need | MUST |
 
 ### FR-8xx — Views, Filters, Search
 
@@ -255,7 +257,7 @@ Each requirement: `FR-###`, actor, statement, acceptance criteria, priority (**M
 | NFR-18 | Maintainability | Ruff + mypy strict on backend, ESLint + `tsc --noEmit` on frontend, both blocking in CI | CI required checks |
 | NFR-19 | Maintainability | Coverage floor: 80% overall, 90% on `auth` and `permissions` | `pytest --cov` gate |
 | NFR-20 | Portability | Runs unchanged on any container host; no provider-specific SDK outside `integrations/` | Deploy to a second target |
-| NFR-21 | Cost | Pilot runs within SendGrid and Twilio free/low tiers; batching and digests limit message volume | Monthly cost review |
+| NFR-21 | Cost | Pilot runs at zero messaging cost on a free Gmail account; batching and digests keep volume inside the ~500 recipients/day quota | Monthly volume review against the quota |
 | NFR-22 | Scalability | Horizontal scaling of the web tier requires no code change | Run 2 web replicas; WebSocket fan-out via Redis stays consistent |
 
 ---
@@ -293,8 +295,7 @@ graph TB
     end
 
     subgraph External
-        SG[SendGrid<br/>email]
-        TW[Twilio<br/>SMS]
+        SG[Gmail SMTP<br/>smtp.gmail.com:587]
         ST[S3-compatible<br/>object storage]
     end
 
@@ -308,10 +309,7 @@ graph TB
     API --> ST
     WK --> DB
     WK --> RD
-    WK --> SG
-    WK --> TW
-    SG -.->|delivery webhook| API
-    TW -.->|status + STOP webhook| API
+    WK -->|SMTP submission, STARTTLS| SG
 ```
 
 ### 5.3 Container view
@@ -416,7 +414,7 @@ Not a service; the substrate every module depends on. Nothing in `core` may impo
 | `rate_limit.py` | Redis token-bucket limiter, applied per route and per identity (IP for anonymous, user id for authenticated) |
 | `exceptions.py` | Application error hierarchy and handlers rendering RFC 7807 `application/problem+json` |
 | `logging.py` | `structlog` JSON output, request-id contextvar propagated into worker tasks |
-| `i18n.py` | Locale resolution for outbound email and SMS: user preference, then `Accept-Language`, then default `he` |
+| `i18n.py` | Locale resolution for outbound email: user preference, then `Accept-Language`, then default `he` |
 | `pagination.py` | Cursor pagination helpers shared by every list endpoint |
 
 **Failure modes:** a missing environment variable aborts startup with a named error rather than failing at first use. Redis unavailability degrades gracefully — rate limiting fails open with a warning, permission cache falls through to the database.
@@ -435,11 +433,11 @@ Not a service; the substrate every module depends on. Nothing in `core` may impo
 | `POST /auth/refresh` | Rotate the refresh token, issue a new access token |
 | `POST /auth/logout` · `POST /auth/logout-all` | Revoke one session or the whole family |
 | `POST /auth/password-reset/request` · `/confirm` | Forgot-password flow |
-| `POST /auth/phone/verify/request` · `/confirm` | SMS verification enabling SMS notifications |
+| `POST /auth/phone/verify/request` · `/confirm` | Deferred with FR-702. Not implemented in this release |
 
 **Internal interface:** `create_invitation(email, role, project_ids, invited_by) -> Invitation` — called by `admin`, which never touches the `invitations` table directly.
 
-**Failure modes:** SendGrid down at invitation time — the invitation row still exists and the outbox retries; the manager sees `pending (delivery retrying)`. OTP requested when SendGrid is down — the endpoint returns success (no enumeration signal) and the user sees "code sent, may take a minute".
+**Failure modes:** SMTP unreachable at invitation time — the invitation row still exists and the outbox retries; the manager sees `pending (delivery retrying)`. OTP requested while SMTP is unreachable — the endpoint returns success (no enumeration signal) and the user sees "code sent, may take a minute". Gmail daily quota exhausted — OTP and invitation mail is prioritized over digests and reminders (FR-714), and an admin warning is raised before the ceiling is reached rather than after.
 
 Full flow and controls: §8.
 
@@ -544,24 +542,32 @@ domain event (same DB transaction)
                  ├─ resolve recipients   (assignees, mentioned, followers, escalation targets)
                  ├─ deduplicate          (one message per user per event)
                  ├─ filter by preference (event × channel, FR-705)
-                 ├─ apply quiet hours    (defer SMS, escalations bypass)
+                 ├─ apply quiet hours    (defer email + SMS, escalations bypass)
                  ├─ pick locale          (user language)
                  └─ dispatch per channel
-                        ├─ email  → SendGrid dynamic template
-                        ├─ sms    → Twilio (verified + not opted-out only)
+                        ├─ email  → render he/en template → SMTP submit
+                        ├─ sms    → deferred (FR-702); rows are skipped, not failed
                         └─ in_app → INSERT + WebSocket push
-                 └─▶ INSERT notification_deliveries (provider id, status, error)
+                 └─▶ INSERT notification_deliveries (message id, status, error)
 ```
 
 **Transactional outbox is the point (FR-709).** Enqueuing to Celery inside a request means a crash between `COMMIT` and `enqueue` silently drops the notification, and a rollback after a successful enqueue sends a message about a change that never happened. Writing the outbox row inside the same transaction makes both impossible.
 
 Retries: exponential backoff (1 m, 5 m, 25 m, 2 h, 10 h), max 5 attempts, then a dead-letter status visible in the admin delivery log with manual retry.
 
-Webhooks: `POST /webhooks/sendgrid` (signature-verified; records bounce, spam report, delivered) and `POST /webhooks/twilio` (signature-verified; records delivery status and processes inbound `STOP` opt-out).
+**No delivery webhooks.** This is the cost of moving to SMTP and it is accepted deliberately. SMTP tells you the relay *accepted* the message; it does not tell you the mailbox received it. Bounces and spam reports arrive as mail to `kavimsupport@gmail.com` and are not ingested (FR-713). `notification_deliveries.status` therefore means:
 
-Templates live in `modules/notifications/templates/` — one directory per event, `he` and `en` subjects and bodies, plus a plaintext fallback. Email uses SendGrid dynamic templates referenced by id from config, so copy changes do not require a deploy.
+| Status | Meaning under SMTP |
+|---|---|
+| `sent` | The relay returned `250` and a message id. Nothing more is known |
+| `failed` | The relay rejected it, or the connection failed after all retries |
+| `dead_letter` | Retries exhausted. Visible in the admin log with manual retry |
 
-**Failure modes:** provider outage → deliveries stay `pending`, retries continue, nothing is lost. Provider rate limit → `429` handled as a retryable error with backoff. Bad phone number → permanent failure, no retry, `phone_verified_at` cleared and the user notified by email.
+Reinstating true delivery tracking means swapping the provider, not rewriting the pipeline — everything above the `EmailSender` interface in §6.14 is provider-agnostic.
+
+Templates live in `modules/notifications/templates/` — one directory per event, `he` and `en` subjects and bodies, plus a plaintext fallback. They are **rendered locally** with Jinja2 and versioned in git. That is strictly better than the hosted-template approach it replaces: copy changes are reviewed in a pull request, they diff, and they cannot drift between environments.
+
+**Failure modes:** SMTP unreachable → deliveries stay `pending`, retries continue, nothing is lost. Gmail throttling (`421`/`450`) → retryable, backoff applies. Authentication failure (`535`) → **not** retryable; it means the App Password was revoked, so it dead-letters immediately and raises an admin alert rather than burning five attempts. Daily quota exceeded (`550 5.4.5`) → non-urgent mail defers to the next window, urgent mail dead-letters visibly.
 
 ### 6.9 `files` — attachments and evidence photos
 
@@ -626,13 +632,28 @@ Aggregate endpoints for the project dashboard, and export endpoints. Exports und
 
 ### 6.14 `integrations` — external providers
 
-Every external SDK is confined here. No module imports `sendgrid` or `twilio` directly, which keeps NFR-20 (portability) true and makes these the only files to stub in tests.
+Every external client is confined here. No module imports `aiosmtplib`, `smtplib`, or `boto3` directly, which keeps NFR-20 (portability) true and makes these the only files to stub in tests.
 
 | File | Notes |
 |---|---|
-| `sendgrid_client.py` | Dynamic template send, sandbox mode in development (nothing leaves the machine), webhook signature verification, typed error mapping |
-| `twilio_client.py` | E.164 normalization for Israeli numbers (`05X…` → `+9725X…`), 160-character GSM-7 awareness, status callback URL, `STOP` handling |
+| `email.py` | The `EmailSender` protocol and the message type. Everything upstream depends on this, not on a provider |
+| `smtp_client.py` | The Gmail implementation: `aiosmtplib`, STARTTLS on 587, App Password auth, connection reuse across a batch, dry-run mode, SMTP status-code → typed error mapping |
 | `storage.py` | Presign, put, delete, copy. Local-disk implementation for development, S3-compatible for production |
+
+The split between `email.py` and `smtp_client.py` is the whole portability story. `modules/notifications/` renders a message and hands it to an `EmailSender`. It has no idea SMTP exists. Swapping to SES or a transactional provider later is one new file in this folder and one changed line of wiring — and it is the only way to get real delivery tracking back, so the seam is worth keeping clean.
+
+#### 6.14.1 SMS is deferred
+
+No SMS provider is integrated in this release (FR-702, FR-711). What survives:
+
+- `NotificationChannel.SMS` and `OtpChannel.SMS` stay in `core/enums.py`, so the `CHECK`
+  constraints they generate stay in the database and **no migration is needed** to add SMS later.
+- `notification_preferences` keeps its SMS column; the UI renders it disabled.
+- `users.phone` and `phone_verified_at` stay. Phone numbers can be collected now and verified
+  when there is something to verify them for.
+- `notification_deliveries` already carries `channel`, so SMS rows will slot in unchanged.
+
+What is gone until then: the `twilio` dependency, the `TWILIO_*` settings, `POST /webhooks/twilio`, and the phone-verification endpoints. Nothing dispatches to the SMS channel — the sweeper skips those rows rather than failing them, so a preference row referring to SMS is inert, not broken.
 
 ---
 
@@ -848,7 +869,7 @@ Hebrew full-text search: Postgres has no Hebrew stemmer, so `search_vector` uses
 sequenceDiagram
     participant MG as Manager
     participant API as FastAPI
-    participant SG as SendGrid
+    participant SG as Gmail SMTP
     participant IV as Invitee
     participant DB as PostgreSQL
 
@@ -920,7 +941,7 @@ Refresh rotation with reuse detection: every refresh issues a new token and mark
 | Secrets | Environment variables only; `.env` gitignored; `gitleaks` in CI; `.env.example` carries dummy values |
 | Dependencies | `pip-audit` and `npm audit` in CI, weekly Dependabot |
 | Audit | Every auth event and every mutation written to an append-only log the application role cannot modify |
-| Webhooks | SendGrid and Twilio signatures verified before the body is parsed |
+| SMTP credentials | The Gmail App Password is a `SecretStr`, never logged, and transmitted only over STARTTLS. Certificate verification is never disabled. A `535` authentication failure raises an admin alert — a revoked App Password must be visible, not retried into silence |
 
 ### 8.4 Authorization model
 
@@ -1017,8 +1038,8 @@ POST   /auth/logout                       revoke this session
 POST   /auth/logout-all                   revoke the token family
 POST   /auth/password-reset/request       send reset link
 POST   /auth/password-reset/confirm       set new password, revoke sessions
-POST   /auth/phone/verify/request         SMS code
-POST   /auth/phone/verify/confirm         confirm phone
+POST   /auth/phone/verify/request         deferred with FR-702, not implemented
+POST   /auth/phone/verify/confirm         deferred with FR-702, not implemented
 ```
 </details>
 
@@ -1140,8 +1161,7 @@ GET    /ws                                WebSocket; JWT sent as first message
 
 GET    /health/live                       process is up
 GET    /health/ready                      database + Redis reachable
-POST   /webhooks/sendgrid                 signature-verified
-POST   /webhooks/twilio                   signature-verified, handles STOP
+                                          (no provider webhooks — SMTP has none, see §6.8)
 ```
 </details>
 
@@ -1297,7 +1317,7 @@ Route-level code splitting; the board grid virtualized on rows and columns; opti
 | Integration | pytest + `testcontainers-postgres` — a real Postgres, not SQLite. JSONB, GIN, `CITEXT`, and `SKIP LOCKED` behave differently, so testing against SQLite would validate the wrong database |
 | API | `httpx.AsyncClient` against the app. Every endpoint tested for 200, 401, 403, 404, 422 |
 | Security | A test enumerating **every** route and asserting each declares an explicit permission — the mechanical enforcement of FR-209 |
-| Providers | SendGrid and Twilio clients stubbed at the `integrations/` boundary; contract tests against SendGrid sandbox mode |
+| Providers | The `EmailSender` protocol is stubbed at the `integrations/` boundary — no test ever opens a socket to Gmail. One contract test runs the real `aiosmtplib` client against [`aiosmtpd`](https://pypi.org/project/aiosmtpd/) in-process, so the wire format, Hebrew MIME encoding, and error mapping are exercised without leaving the machine |
 | Migrations | Alembic `upgrade head` then `downgrade base` round trip in CI, so a broken downgrade is caught before it is needed at 2 a.m. |
 
 Fixtures via `factory-boy`: `UserFactory`, `ProjectFactory`, `TaskFactory`, `ColumnFactory`, and a `seeded_board` fixture producing a realistic 50-task project.
@@ -1314,7 +1334,7 @@ Critical paths, each run in both `he` and `en`:
 2. Manager creates a project, adds a custom dropdown column, creates a task with subtasks, assigns the worker
 3. Worker logs in on a mobile viewport (375 px), sees the card list, taps a card, changes status, adds a comment with a photo
 4. Two browser contexts on the same board: user A edits a cell, user B sees it live without refreshing
-5. Assignment triggers an email (SendGrid sandbox) and an SMS (Twilio test credentials); both delivery rows recorded
+5. Assignment triggers an email captured by a local SMTP sink; the delivery row is recorded with the returned message id
 6. Permission denial: a worker attempts to edit a manager-only column and is blocked in the UI and by the API
 7. Offline: go offline, change a status, come back online, the change syncs
 8. Concurrency: two users write the same cell; the loser sees the conflict dialog and both outcomes are reachable
@@ -1369,16 +1389,19 @@ Every one is declared in `core/config.py` and fails fast at startup if required 
 | `OTP_TTL_MINUTES` | `10` | |
 | `OTP_MAX_ATTEMPTS` | `5` | |
 | `INVITATION_TTL_DAYS` | `7` | |
-| `SENDGRID_API_KEY` | `SG.…` | |
-| `SENDGRID_FROM_EMAIL` | `no-reply@…` | Requires a verified sender domain — see §14 |
-| `SENDGRID_FROM_NAME` | `Kavim` | |
-| `SENDGRID_SANDBOX` | `true` in development | Nothing leaves the machine when true |
-| `SENDGRID_TEMPLATE_INVITATION` | `d-…` | One id per event type |
-| `SENDGRID_WEBHOOK_KEY` | | Signature verification |
-| `TWILIO_ACCOUNT_SID` | `AC…` | |
-| `TWILIO_AUTH_TOKEN` | | |
-| `TWILIO_FROM_NUMBER` | `+972…` | |
-| `TWILIO_ENABLED` | `false` in development | |
+| `EMAIL_ENABLED` | `false` in development | Master switch. Off means the outbox still records rows, nothing is submitted |
+| `EMAIL_DRY_RUN` | `true` in development | Renders the message and logs it instead of connecting. Must be `false` in production — the config guard enforces it |
+| `SMTP_HOST` | `smtp.gmail.com` | |
+| `SMTP_PORT` | `587` | 587 + STARTTLS. Port 465 (implicit TLS) is supported by setting `SMTP_USE_TLS=true` |
+| `SMTP_USERNAME` | `kavimsupport@gmail.com` | The full Gmail address |
+| `SMTP_PASSWORD` | | **Google App Password**, 16 characters, not the account password. Requires 2-step verification on the account |
+| `SMTP_STARTTLS` | `true` | Never disable outside a local sink |
+| `SMTP_USE_TLS` | `false` | Implicit TLS on 465; mutually exclusive with `SMTP_STARTTLS` |
+| `SMTP_TIMEOUT_SECONDS` | `30` | |
+| `EMAIL_FROM_ADDRESS` | `kavimsupport@gmail.com` | On free Gmail this **must** equal `SMTP_USERNAME` — Gmail rewrites anything else, so a mismatch silently sends from the wrong address |
+| `EMAIL_FROM_NAME` | `Kavim` | Display name only |
+| `EMAIL_REPLY_TO` | | Optional. Useful when the sending mailbox is unmonitored |
+| `EMAIL_DAILY_QUOTA` | `500` | Free Gmail ceiling (FR-714). Raise to `2000` on Workspace |
 | `STORAGE_BACKEND` | `local` · `s3` | |
 | `STORAGE_BUCKET` · `STORAGE_ENDPOINT` · `STORAGE_ACCESS_KEY` · `STORAGE_SECRET_KEY` · `STORAGE_REGION` | | S3-compatible |
 | `DEFAULT_LOCALE` | `he` | |
@@ -1391,7 +1414,7 @@ Every one is declared in `core/config.py` and fails fast at startup if required 
 
 ```bash
 git clone <repo> && cd kavim
-cp .env.example .env                 # fill SendGrid/Twilio later; sandbox works without them
+cp .env.example .env                 # add the Gmail App Password later; dry-run works without it
 docker compose -f infra/docker-compose.yml up -d db redis
 cd backend && uv sync && alembic upgrade head && python -m infra.scripts.seed
 uvicorn app.main:app --reload        # :8000
@@ -1450,12 +1473,12 @@ Eight phases. Each ends in something demoable to the line manager, so feedback a
 |---|---|---|
 | **0 — Foundation** | Repo structure, Docker Compose, `core` (config, database, logging, exceptions), health endpoints, React shell with i18n and RTL, CI pipeline | `docker compose up` serves `/health/ready` = 200 and the React shell loads in Hebrew RTL |
 | **1 — Data model** | All SQLAlchemy models, full Alembic migration, seed script | Migrations round-trip; the seeded demo board is queryable; ERD matches the code |
-| **2 — Auth** | Invitation → OTP → registration → login → refresh → password reset, all security controls | E2E test 1 passes; a real invitation email arrives via SendGrid sandbox |
+| **2 — Auth** | Invitation → OTP → registration → login → refresh → password reset, all security controls | E2E test 1 passes; the invitation email is captured by a local SMTP sink, and one manual end-to-end send through Gmail reaches a real inbox |
 | **3 — Authorization + admin panel** | Roles, permission matrix, project membership, column-level rules, admin UI, audit log | A manager grants a worker edit rights on one column; the worker can edit that one and is blocked on the rest, in UI and API |
 | **4 — Projects and column engine** | Project CRUD, groups, column definitions of every type, templates | A manager builds a hygiene-audit board with custom columns without a developer |
 | **5 — Tasks and cells** | Task/subtask CRUD, assignment, inline cell editing per type, drag-drop, filters, sort, bulk edit | The board is fully usable on desktop; 500 tasks scroll smoothly; concurrent-edit conflict resolves correctly |
 | **6 — Collaboration** | Comments, mentions, attachments, camera capture, WebSocket live updates, presence | Two browsers see each other's edits and comments live; a photo taken on a phone appears on the desktop board |
-| **7 — Notifications** | Outbox pipeline, SendGrid email, Twilio SMS, preference matrix, quiet hours, digests, overdue escalation, delivery log | Assignment sends a real email and a real SMS; overdue escalates to the manager; a provider outage loses nothing |
+| **7 — Notifications** | Outbox pipeline, SMTP email, preference matrix, quiet hours, digests, overdue escalation, delivery log, quota accounting. **SMS deferred (§6.14.1)** | Assignment sends a real email; overdue escalates to the manager; an SMTP outage loses nothing; the quota warning fires before the ceiling |
 | **8 — Mobile, PWA, reports** | Card view, bottom navigation, task sheet, offline queue, installable PWA, dashboard, CSV/XLSX export, RTL polish, accessibility pass | A worker on a real phone on plant Wi-Fi completes a review in Hebrew, including one status update made while offline |
 
 Phases 0–2 are sequential. Phases 4–6 overlap between backend and frontend work. Phase 7 depends on provider credentials being ready (§14) and should be unblocked early.
@@ -1467,8 +1490,8 @@ Phases 0–2 are sequential. Phases 4–6 overlap between backend and frontend w
 | # | Risk / question | Impact | Action |
 |---|---|---|---|
 | R1 | **Docker Desktop is not installed** on the development machine | Blocks Phase 0 | Install Docker Desktop with the WSL 2 backend. Fallback: native Postgres 16 + Redis via WSL, at the cost of dev/prod drift |
-| R2 | **SendGrid account, API key, and a verified sender domain** are needed | Blocks Phase 7; partially blocks Phase 2 testing | Start domain verification now — DNS records (SPF, DKIM) need IT and take days. Sandbox mode unblocks development immediately |
-| R3 | **Twilio Israeli sender registration** has lead time; alphanumeric sender ids are regulated | Blocks SMS in Phase 7 | Open the Twilio account and start sender registration in parallel with Phase 0. Use test credentials meanwhile |
+| R2 | **Gmail's ~500 recipients/day quota** is a hard ceiling, and exceeding it suspends sending for 24 hours — which would take OTP and invitation mail down with it | Caps notification volume; a growth or multi-line rollout hits it | Quota accounting with prioritization (FR-714). Digests over per-event mail. Google Workspace raises it to ~2000; a transactional provider removes the ceiling entirely and restores delivery webhooks |
+| R3 | **Gmail delivers no bounce or spam webhooks**, so a bad address fails silently from the application's point of view | Delivery reporting is "relay accepted", not "inbox received" (FR-713) | Accepted for the pilot. Bounces land in `kavimsupport@gmail.com`; the admin runbook covers checking it. The `EmailSender` seam keeps a provider swap cheap |
 | R4 | **Hebrew full-text search** has no Postgres stemmer | Search quality on Hebrew task text | `simple` config + `pg_trgm` trigram matching. Adequate for titles; revisit only if users complain |
 | R5 | **Plant Wi-Fi reliability** | Drives the entire offline requirement | Measure actual coverage at the stations workers will use, before Phase 8. The result may justify more offline scope, or less |
 | R6 | **Photo storage growth** — evidence photos at ~3 MB each | Cost and backup time | Client-side downscale, thumbnail variants, a documented retention policy. Decide the retention period with QA compliance |
@@ -1478,6 +1501,8 @@ Phases 0–2 are sequential. Phases 4–6 overlap between backend and frontend w
 | R10 | **Beat must be a singleton** | Two beat replicas double-send notifications | Enforced by deployment configuration and called out in the release runbook |
 | R11 | **Regulatory retention** for food-production quality records | May mandate retention beyond 24 months and immutability guarantees | **Open question: does the client's QA policy or local regulation set a required retention period?** |
 | R12 | **Who is the first real user cohort?** | Shapes Phase 8 priorities | **Open question: which line, which shift, how many workers for the pilot?** |
+| R13 | **Mail from a `@gmail.com` sender to corporate recipients** is more likely to be filtered than mail from an authenticated domain | Invitations and OTP codes land in spam; users cannot register at all | Test against the plant's real mail domain early in Phase 2, not at pilot. If filtering appears, Google Workspace with SPF/DKIM on the company domain is the fix — plan for the DNS lead time |
+| R14 | **A revoked or rotated App Password** silently breaks all outbound mail | Total notification outage, including OTP | `535` is treated as non-retryable and raises an admin alert immediately, rather than dead-lettering quietly after five attempts |
 
 ### Questions carried into the next refinement round
 
@@ -1525,13 +1550,53 @@ Recording the reasoning so these are not relitigated in month three.
 
 **Decision:** Notification rows are written in the same database transaction as the domain change and swept by a Celery beat task.
 
-**Reasoning:** Enqueuing to Celery inside the request handler creates two failure modes with no clean fix: a crash between `COMMIT` and `enqueue` silently drops the notification, and a rollback after a successful enqueue sends a message about a change that never happened. The outbox makes both structurally impossible. The cost is up to 30 seconds of latency on non-urgent notifications, which is irrelevant for email and SMS.
+**Reasoning:** Enqueuing to Celery inside the request handler creates two failure modes with no clean fix: a crash between `COMMIT` and `enqueue` silently drops the notification, and a rollback after a successful enqueue sends a message about a change that never happened. The outbox makes both structurally impossible. The cost is up to 30 seconds of latency on non-urgent notifications, which is irrelevant for email.
 
 ### ADR-006 — Modular monolith
 
 **Decision:** One deployable FastAPI application with enforced internal module boundaries.
 
 **Reasoning:** At one line and under 50 workers, microservices would add five deployables, distributed tracing, eventual consistency, and cross-service transaction problems in exchange for scaling headroom that is not needed. The module boundaries — enforced mechanically by `import-linter`, not by good intentions — mean any module can be extracted into its own service later without rewriting its call sites. This buys the option without paying for it now.
+
+### ADR-007 — Gmail SMTP instead of SendGrid; SMS deferred
+
+*Supersedes the SendGrid choice recorded in the original §6.14 and ADR-005's mention of SMS.*
+
+**Decision:** Outbound email goes through authenticated SMTP to `smtp.gmail.com:587` using the
+`kavimsupport@gmail.com` account and a Google App Password. Email templates are rendered
+locally with Jinja2 and versioned in git. No SMS provider is integrated in this release; the
+`sms` channel remains in the schema and the enums so it can be added without a migration.
+
+**Reasoning:** The pilot is one line and under 50 workers. Measured against that, SendGrid's
+advantages were a raised sending ceiling, delivery webhooks, and hosted templates — none of
+which the pilot needs, and all of which cost setup time. Domain authentication (SPF and DKIM
+records) required IT involvement with a multi-day lead time and was on the critical path for
+testing the auth flow. An App Password takes two minutes and unblocks Phase 2 immediately.
+Twilio was worse: Israeli sender registration is regulated and slow, for a channel with no
+identified requirement yet.
+
+**What this costs, stated plainly:**
+
+- **A hard ~500 recipients/day ceiling.** Exceeding it suspends sending for 24 hours, which
+  would take OTP and invitation mail down with it. Mitigated by quota accounting with
+  prioritization (FR-714), not by hoping.
+- **No delivery or bounce webhooks.** `notification_deliveries.status` degrades from
+  "delivered" to "the relay accepted it" (FR-713). Bounces arrive as mail to the sending
+  mailbox and are not ingested.
+- **The From address is locked to the Gmail account.** Free Gmail rewrites anything else, so
+  `no-reply@kavim.local` is not available and mail visibly comes from a `@gmail.com` address —
+  which corporate spam filters treat with more suspicion (R13).
+
+**Why this is reversible cheaply:** `integrations/email.py` defines an `EmailSender` protocol
+and a provider-neutral message type. `modules/notifications/` depends only on that. Moving to
+SES, Postmark, or back to SendGrid is one new file in `integrations/` and one changed line of
+wiring — and it is the only way to get real delivery tracking back, so the seam is load-bearing
+rather than speculative. Local templates make the swap *easier* than it would have been with
+hosted ones, because the copy comes along.
+
+**Revisit when** any of: a second production line is onboarded, daily volume passes ~350
+recipients, spam filtering blocks invitations at the customer domain, or delivery evidence
+becomes a compliance requirement for quality records.
 
 ---
 

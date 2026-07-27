@@ -34,7 +34,7 @@ app/
 ├── models/         SQLAlchemy ORM, one module per aggregate      (Phase 1)
 ├── schemas/        Pydantic request/response — the OpenAPI source (Phase 2+)
 ├── modules/        feature modules; talk via service.py, never routers
-├── integrations/   the ONLY place sendgrid/twilio/boto3 are imported
+├── integrations/   the ONLY place aiosmtplib/smtplib/boto3 are imported
 ├── workers/        Celery app, beat schedule, background tasks
 └── static/         built frontend, mounted in production
 ```

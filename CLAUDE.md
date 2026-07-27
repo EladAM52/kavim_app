@@ -45,7 +45,7 @@ Enforced by `import-linter` (`backend/.importlinter`) in CI.
 
 ### 4. External SDKs live only in `integrations/`
 
-No module imports `sendgrid`, `twilio`, or `boto3` directly. This keeps the app portable and gives tests one place to stub.
+No module imports `aiosmtplib`, `smtplib`, or `boto3` directly. This keeps the app portable and gives tests one place to stub. Email goes through the `EmailSender` protocol in `integrations/email.py`, never the SMTP client itself — see ADR-007 in `docs/SPEC.md` §15.
 
 ### 5. Notifications go through the outbox
 

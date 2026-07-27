@@ -50,10 +50,12 @@ forbidden_modules =
     app.schemas
     app.workers
 
-; ── external provider SDKs appear ONLY in integrations ────────────────────
+; ── external provider clients appear ONLY in integrations ─────────────────
 ; Keeps the app portable (SPEC NFR-20) and gives tests one place to stub.
+; smtplib is listed alongside aiosmtplib on purpose: being in the standard
+; library makes it *easier* to reach for by accident, not more acceptable.
 [importlinter:contract:sdk-containment]
-name = provider SDKs only inside app.integrations
+name = provider clients only inside app.integrations
 type = forbidden
 source_modules =
     app.core
@@ -62,6 +64,6 @@ source_modules =
     app.modules
     app.workers
 forbidden_modules =
-    sendgrid
-    twilio
+    aiosmtplib
+    smtplib
     boto3
