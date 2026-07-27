@@ -188,6 +188,113 @@ jobs:
         run: npm audit --audit-level=high || true
 
   # ══════════════════════════════════════════════════════════════════════
+  #  end-to-end (SPEC §11.3)
+  # ══════════════════════════════════════════════════════════════════════
+  # The only job that runs both halves of the system at once, and the only
+  # coverage that can catch an RTL layout regression — the component suite
+  # passes identically whether the Hebrew UI renders right-to-left or collapses
+  # to the left.
+  e2e:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: kavim
+          POSTGRES_PASSWORD: kavim_test
+          POSTGRES_DB: kavim_e2e
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U kavim -d kavim_e2e"
+          --health-interval 5s --health-timeout 5s --health-retries 12
+      redis:
+        image: redis:7-alpine
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 3s --health-retries 12
+
+    env:
+      DATABASE_URL: postgresql+asyncpg://kavim:kavim_test@localhost:5432/kavim_e2e
+      REDIS_URL: redis://localhost:6379/0
+      CELERY_BROKER_URL: redis://localhost:6379/1
+      APP_ENV: development
+      LOG_JSON: 'false'
+      LOG_LEVEL: WARNING
+      SECRET_KEY: ci_test_secret_key_not_used_in_production_padding
+      # No credentials, and none needed: dry-run renders and logs every message
+      # without opening a connection, and the specs read the code out of the
+      # outbox rather than a mailbox. A CI job that could send real mail would
+      # email a stranger every time somebody opened a pull request.
+      EMAIL_ENABLED: 'true'
+      EMAIL_DRY_RUN: 'true'
+      APP_BASE_URL: http://localhost:5173
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install backend dependencies
+        working-directory: backend
+        run: uv sync --frozen
+
+      - name: Create extensions
+        run: |
+          PGPASSWORD=kavim_test psql -h localhost -U kavim -d kavim_e2e             -c 'CREATE EXTENSION IF NOT EXISTS pgcrypto;'             -c 'CREATE EXTENSION IF NOT EXISTS citext;'             -c 'CREATE EXTENSION IF NOT EXISTS pg_trgm;'             -c 'CREATE EXTENSION IF NOT EXISTS btree_gin;'
+
+      - name: Migrate and seed
+        working-directory: backend
+        run: |
+          uv run alembic upgrade head
+          uv run python -m app.scripts.seed
+
+      - name: Start the backend
+        working-directory: backend
+        run: |
+          uv run uvicorn app.main:app --host 127.0.0.1 --port 8000 &
+          # Poll rather than sleep: a fixed wait is either flaky or slow, and on a
+          # cold runner it is reliably both.
+          for _ in $(seq 1 60); do
+            curl -sf http://127.0.0.1:8000/health/ready && break
+            sleep 1
+          done
+          curl -sf http://127.0.0.1:8000/health/ready
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Install Playwright browsers
+        working-directory: frontend
+        run: npx playwright install --with-deps chromium
+
+      - name: Run e2e
+        working-directory: frontend
+        run: npm run e2e
+
+      # An e2e failure nobody can reproduce locally is barely better than no e2e
+      # at all. The trace replays the run frame by frame, with the network log.
+      - name: Upload traces and screenshots
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: |
+            frontend/playwright-report/
+            frontend/test-results/
+          retention-days: 7
+
+  # ══════════════════════════════════════════════════════════════════════
   #  docker build
   # ══════════════════════════════════════════════════════════════════════
   docker:

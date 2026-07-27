@@ -59,3 +59,9 @@ tmp/
 
 # Celery beat scheduler state — local runtime file, not source.
 celerybeat-schedule*
+
+# Playwright
+test-results/
+playwright-report/
+blob-report/
+.playwright/

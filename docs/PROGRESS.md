@@ -1044,3 +1044,99 @@ uv run pytest --cov                  # 257 passed, 85%
 Then open <http://localhost:8000/docs>, log in as `worker1@kavim.example.com`
 (`KavimDemo2026!`) and call `GET /admin/users` — 403. Log in as `admin@kavim.example.com` and
 call it again — 200.
+
+---
+
+## Session 9 — 2026-07-28 · Playwright, and the visual check Phase 2 owed
+
+The last two debts from Phase 2, both closed. **14 e2e tests** across two locales,
+plus the first time anybody has looked at a rendered page.
+
+### Delivered
+
+| File | Role |
+|---|---|
+| `frontend/playwright.config.ts` | Two projects — `he-mobile` (Pixel 7, `he-IL`) and `en-desktop`. Every spec runs twice |
+| `frontend/e2e/auth.spec.ts` | invite → OTP → register → reload → login, plus spent/invalid tokens, error copy, and a 320px layout check |
+| `frontend/e2e/support/backend.ts` | The seam: shells out to the invite CLI for an invitation and the queued code |
+| `frontend/tsconfig.e2e.json` | Its own project — specs are Node code, and `types: ["node"]` must not leak into browser code |
+| `.github/workflows/ci.yml` | An `e2e` job: Postgres + Redis, migrate, seed, start the backend, run headless, upload traces on failure |
+| `app/scripts/invite.py` | `--json` and `--otp EMAIL`, both reusing `invite_user` |
+
+### The decisions worth knowing
+
+**The specs import the app's own locale files.** A copy change then does not break the test —
+but a *missing translation* does, which is the failure actually worth catching. It also means
+the Hebrew assertions are written in Hebrew, against the same strings the user reads.
+
+**No test-only endpoint, and no second database driver.** An e2e test has to start from a real
+invitation and needs the code that was "emailed". Both come from the CLI, which refuses to run
+in production and calls the same `invite_user` as `POST /admin/invitations`. A fixture that
+minted invitations independently would drift from the real path; a `pg` dependency in the
+frontend toolchain would duplicate the schema.
+
+**CI runs with `EMAIL_DRY_RUN=true` and no credentials.** The specs read the code out of the
+outbox rather than a mailbox, so nothing needs to be sent — and a CI job that *could* send real
+mail would email a stranger every time somebody opened a pull request.
+
+**Playwright starts Vite but deliberately not the backend.** A suite that silently boots an API
+against whatever database happens to be configured is how a test run destroys development data.
+
+**One worker, no parallelism.** The auth flow is inherently sequential — an invitation is
+consumed exactly once — and parallel workers would interfere on shared rate-limit counters for
+the sake of a few seconds.
+
+### What the browser found that 33 component tests could not
+
+RTL renders correctly: heading, labels, and brand at the start (right), toggle at the end
+(left), required markers on the correct side, no horizontal overflow at 320px, 44px targets
+intact.
+
+**One real defect, visible only by looking.** `AuthLayout` wrapped the language toggle in a
+`bg-brand-700` block, because the toggle is styled for the teal app header and its unselected
+state is invisible on a pale background. The result was a hard-edged green slab floating on the
+light auth page — the exact opposite of the "blend into the background, white pill on the
+selected locale" the toggle was designed for two sessions ago.
+
+Fixed properly rather than patched: `LanguageToggle` now takes a `tone`, and `onLight` uses a
+barely-there `slate-200/60` track with a white pill. The wrapper is gone. This is precisely the
+class of thing the component suite is structurally unable to see — it asserts behaviour, and
+behaviour was never wrong.
+
+### Two smaller things the run surfaced
+
+- **`Field` renders `<label>סיסמה *</label>`.** An exact-match selector misses it and a
+  substring match also matches `אימות סיסמה`, so `field()` anchors at the start. Worth knowing
+  that the required marker is part of the accessible name.
+- **The "no server English leaked" assertion only means anything in Hebrew.** The English
+  translation legitimately reads "Email or password is incorrect", so a leak of the backend's
+  own wording is indistinguishable from correct output. In Hebrew, any Latin text in that alert
+  proves the client rendered `problem.detail` instead of looking up the code.
+
+### Verification evidence
+
+```
+playwright     14 passed  (7 specs × he-mobile + en-desktop)
+tsc -b         no errors  (three projects now: app, node, e2e)
+eslint .       clean
+vitest run     33 passed
+```
+
+### Known gaps
+
+| Gap | Consequence |
+|---|---|
+| No e2e for the admin API | Phase 3B, where SPEC §11.3 scenario 6 (a worker blocked on a manager-only column) finally becomes testable |
+| No `axe-core` pass | NFR-05 wants automated a11y assertions on every page-level component. The harness now exists to host them |
+| Only Chromium | Firefox and WebKit are one config block each, deferred until there is a reason |
+
+### Next step
+
+**Phase 3B — the admin UI.** `features/admin/` with `UserTable`, `RoleMatrix`, `InvitationPanel`,
+and `AuditLogView`; a `usePermission` hook and a `RequirePermission` route guard; the `admin`
+i18n namespace in both locales; and the primitives none of it can be built without — Table,
+Modal, Select, Toggle, Badge.
+
+The RoleMatrix grid is the highest RTL risk in the project so far: the first wide
+two-dimensional layout, 5 roles × 30 permissions, where a single physical CSS property escaping
+the ESLint rule pushes the whole table sideways. The e2e harness is now in place to catch that.

@@ -34,7 +34,7 @@ export function AuthLayout({
     <div className="flex min-h-dvh flex-col bg-slate-50">
       <header className="flex items-center justify-between px-4 py-3">
         <span className="text-brand-800 text-lg font-bold">{t('app.name', { ns: 'common' })}</span>
-        <LanguageToggleOnLight />
+        <LanguageToggle tone="onLight" />
       </header>
 
       <main className="flex flex-1 items-start justify-center px-4 pb-10">
@@ -54,19 +54,6 @@ export function AuthLayout({
           {footer && <div className="mt-4 text-center text-sm">{footer}</div>}
         </div>
       </main>
-    </div>
-  );
-}
-
-/**
- * The toggle is styled for the teal app header, where the unselected state is a
- * light tint. On this light background that would be invisible, so it gets a
- * bordered container to sit in.
- */
-function LanguageToggleOnLight(): React.JSX.Element {
-  return (
-    <div className="bg-brand-700 rounded-lg p-0.5">
-      <LanguageToggle />
     </div>
   );
 }

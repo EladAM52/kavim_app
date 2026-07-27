@@ -1,0 +1,28 @@
+{
+  // Playwright specs are Node code that happens to drive a browser, so they get
+  // their own project rather than joining tsconfig.app.json. Two reasons:
+  // `types: ["node"]` must not leak into browser code (that separation is why
+  // tsconfig.app and tsconfig.node are already split), and the specs need
+  // `resolveJsonModule` to import the app's locale files for their assertions.
+  "compilerOptions": {
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.e2e.tsbuildinfo",
+    "composite": true,
+    "target": "ES2022",
+    "lib": ["ES2023", "DOM"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "types": ["node"],
+
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true,
+    "resolveJsonModule": true,
+    "skipLibCheck": true,
+    "noEmit": true
+  },
+  "include": ["e2e", "playwright.config.ts"]
+}
