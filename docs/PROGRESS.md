@@ -20,7 +20,7 @@ Running record of what has been built, what was decided, what broke, and what mu
 |---|---|---|
 | **0** | Foundation: repo, Docker, `core`, health endpoints, React shell with RTL/i18n, CI | ✅ **Complete and verified** |
 | **1** | Data model, Alembic migration, seed script, integration test harness | ✅ **Complete and verified** |
-| 2 | Auth: invite → OTP → register → login → refresh | 🟨 **Backend complete and verified end to end. Frontend outstanding** |
+| 2 | Auth: invite → OTP → register → login → refresh | ✅ **Complete and verified end to end.** Playwright coverage still owed |
 | 3 | RBAC + admin panel | ⬜ |
 | 4 | Projects, groups, column engine | ⬜ |
 | 5 | Tasks, subtasks, cell editing, drag-drop | ⬜ |
@@ -654,6 +654,108 @@ Frontend `features/auth/`: router, auth store with the access token in memory on
 `InvitationLanding`, `OtpVerify`, `Register`, `Login`, `ForgotPassword` — Hebrew RTL,
 mobile-first. Then `api/client.ts`: attach `Authorization`, refresh-on-401 with a
 single-flight guard. Then Playwright across both locales.
+
+---
+
+## Session 7 — 2026-07-27 · Phase 2 frontend: the auth screens
+
+Phase 2 is now usable end to end from a browser. **33 frontend tests** (was 15),
+119 backend, all gates green.
+
+### Delivered
+
+| Area | Files |
+|---|---|
+| Generated types | `api/generated/types.ts` — 829 lines from the live OpenAPI schema. A backend field rename is now a frontend compile error |
+| Session store | `stores/auth.ts` — access token in a module closure, never in any browser storage |
+| Client seam | `api/client.ts` — bearer header, refresh-on-401, single-flight guard, one replay |
+| UI primitives | `components/ui/` — `Button`, `Field`, `Alert`. Logical CSS only, 44px targets |
+| Screens | `features/auth/` — `InvitationLanding`, `OtpVerify`, `Register`, `Login`, `ForgotPassword`, `ResetPassword`, plus `AuthLayout`, `RequireAuth`, `useAuthError` |
+| Routing | `router.tsx` — lazy auth chunks, public/private split, boot refresh gate |
+| Strings | `locales/{he,en}/auth.json` — full namespace, no hardcoded copy |
+
+### The decisions worth knowing
+
+**The single-flight refresh is not an optimisation.** A board screen fires several
+queries at once; when the access token expires they all 401 together. Six parallel
+refreshes would each rotate the token, five of them presenting a value the others
+just spent — and the backend correctly reads that as replay and revokes the whole
+family (SPEC §8.2). The user gets signed out for loading a page. Verified by probe:
+with the `??=` guard removed the test reports **6 refreshes instead of 1**, then
+`KEPT` at 1 when restored.
+
+**Auth entry paths never trigger a refresh.** A wrong password would otherwise
+provoke a refresh attempt and a login retry — turning one user mistake into two
+attempts against a limit of ten before lockout.
+
+**`RequireAuth` distinguishes `unknown` from `anonymous`.** The token is memory-only,
+so a reload starts with nothing and the httpOnly cookie is the only evidence a
+session exists. Treating "not asked yet" as "signed out" would bounce every user to
+the login screen on every refresh.
+
+**The registration screen has no email field at all.** Not disabled — absent. The
+API takes the address from the invitation and rejects a submitted one with a 422, so
+rendering an input would offer a choice that does not exist.
+
+**Emails, passwords, phone numbers, and the OTP get `dir="ltr"`.** An LTR sequence
+rendered RTL reads back in the wrong order; for a verification code that means the
+user types what they see and it is wrong. There is a test asserting the attribute.
+
+**The forgot-password screen shows the same success copy regardless.** "If that
+address is registered…" matches the backend's identical 202, because saying "sent!"
+only for real addresses would rebuild in the UI the enumeration oracle the API
+carefully avoids.
+
+### Verification evidence
+
+```
+tsc -b            no errors
+eslint .          clean  (incl. the physical-CSS ban)
+prettier --check  All matched files use Prettier code style!
+vitest run        33 passed   (12 rtl, 6 store, 8 client, 3 toggle, 4 login)
+vite build        built in 1.35s
+```
+
+Bundle, gzipped: `index` 73.6 kB + `react` 32.1 kB + `i18n` 17.6 kB + `query`
+15.6 kB + CSS 4.9 kB ≈ **144 kB** against the 250 kB budget in NFR-02. Each auth
+screen is its own chunk under 1 kB gzipped, so a signed-in worker never downloads
+them.
+
+The whole flow driven through the **Vite proxy** — the same path the SPA takes:
+
+```
+   emailed link: http://localhost:5173/invite/XX10hDzeSqln…
+1  GET  invitation       200  browsertest@example.com
+2  POST otp/request      202
+3  sweep                 sent=1  code=989963
+4  POST otp/verify       200
+5  POST register         201  roles=['WORKER']
+6  cookies held          ['kavim_refresh']
+   refresh cookie        path=/api/v1/auth  httponly=True
+7  POST refresh          200  new_token=True
+8  POST refresh replay   401  (reuse detected, family revoked)
+```
+
+### Known gaps
+
+| Gap | Consequence |
+|---|---|
+| **No visual browser check** | Verified by component tests and by driving the API through the proxy, *not* by looking at rendered pages. RTL layout is the project's central risk and layout is exactly what these tests do not assert — worth ten minutes with a browser at both locales |
+| **No Playwright** | The `e2e/` specs in `PROJECT_STRUCTURE.md` are still unwritten. This is the coverage that would catch an RTL layout regression |
+| No `/users/me` endpoint | The boot refresh returns the identity, so nothing needs it yet. It arrives in Phase 3 |
+| Only one authenticated route | `/` renders `SystemStatus`. The board arrives in Phase 5 |
+| Sign-out is not in the UI | `authApi.logout` exists and is tested at the client level; no button calls it yet, because the app shell gets its user menu in Phase 3 |
+| The breakpoint chip still ships | The `xs`/`sm`/`md` chip in the header is a development affordance and should be gated behind `import.meta.env.DEV` |
+
+### Next step
+
+Phase 3 — RBAC and the admin panel: `require_permission` as a FastAPI dependency,
+`POST /admin/invitations` (so invitations stop needing a script), the role × permission
+matrix editor, the audit log view, and `tests/security/test_all_routes_declare_permission.py`
+to make CLAUDE.md rule 2 mechanical.
+
+Worth doing first, or alongside: Playwright over the auth flow in both locales, while
+the flow is fresh.
 
 ---
 

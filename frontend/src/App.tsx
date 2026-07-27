@@ -1,10 +1,11 @@
 import { DirectionProvider } from '@radix-ui/react-direction';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { useMemo } from 'react';
+import { RouterProvider } from 'react-router-dom';
 
-import { AppShell } from '@/components/layout/AppShell';
-import { SystemStatus } from '@/features/system/SystemStatus';
+import { ApiError } from '@/api/client';
 import { useDirection } from '@/hooks/useDirection';
+import { router } from '@/router';
 
 function createQueryClient(): QueryClient {
   return new QueryClient({
@@ -14,8 +15,16 @@ function createQueryClient(): QueryClient {
         // spinner and a refetch storm on every reconnect.
         staleTime: 30_000,
         gcTime: 5 * 60_000,
-        retry: 2,
         refetchOnWindowFocus: false,
+        retry: (failureCount, error) => {
+          // Never retry a client error. A 401 is handled by the refresh path in
+          // `api/client.ts`, and retrying a 410 or a 422 just repeats a settled
+          // answer — on the auth endpoints it also spends the rate-limit budget.
+          if (error instanceof ApiError && error.status >= 400 && error.status < 500) {
+            return false;
+          }
+          return failureCount < 2;
+        },
       },
     },
   });
@@ -30,9 +39,7 @@ export default function App(): React.JSX.Element {
       {/* Radix primitives read direction from context, not from the DOM, so
           dropdowns, popovers, and sliders need this to flip correctly. */}
       <DirectionProvider dir={direction}>
-        <AppShell>
-          <SystemStatus />
-        </AppShell>
+        <RouterProvider router={router} />
       </DirectionProvider>
     </QueryClientProvider>
   );

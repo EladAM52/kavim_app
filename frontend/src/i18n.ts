@@ -10,8 +10,10 @@ import i18next from 'i18next';
 import LanguageDetector from 'i18next-browser-languagedetector';
 import { initReactI18next } from 'react-i18next';
 
+import enAuth from '@/locales/en/auth.json';
 import enCommon from '@/locales/en/common.json';
 import enErrors from '@/locales/en/errors.json';
+import heAuth from '@/locales/he/auth.json';
 import heCommon from '@/locales/he/common.json';
 import heErrors from '@/locales/he/errors.json';
 
@@ -25,8 +27,8 @@ import {
 export const LOCALE_STORAGE_KEY = 'kavim.locale';
 
 const resources = {
-  he: { common: heCommon, errors: heErrors },
-  en: { common: enCommon, errors: enErrors },
+  he: { common: heCommon, errors: heErrors, auth: heAuth },
+  en: { common: enCommon, errors: enErrors, auth: enAuth },
 } as const;
 
 export async function initI18n(): Promise<typeof i18next> {
@@ -41,7 +43,7 @@ export async function initI18n(): Promise<typeof i18next> {
       load: 'languageOnly',
       nonExplicitSupportedLngs: true,
       defaultNS: 'common',
-      ns: ['common', 'errors'],
+      ns: ['common', 'errors', 'auth'],
       interpolation: {
         // React escapes output already; double-escaping mangles Hebrew
         // punctuation and quotation marks.
