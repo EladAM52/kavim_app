@@ -20,6 +20,7 @@ from celery.signals import setup_logging, task_postrun, task_prerun
 
 from app.core.config import settings
 from app.core.logging import configure_logging, get_logger, request_id_var
+from app.workers.beat_schedule import BEAT_SCHEDULE
 
 logger = get_logger(__name__)
 
@@ -49,6 +50,20 @@ celery_app.conf.update(
     result_expires=86400,
     broker_connection_retry_on_startup=True,
     worker_hijack_root_logger=False,
+    # The schedule is installed **here**, and that placement is a bug fix.
+    #
+    # `celery -A app.workers.celery_app beat` imports this module and reads
+    # `conf.beat_schedule` off the app it finds. The schedule used to assign
+    # itself onto the app from inside `beat_schedule.py` — but nothing ever
+    # imported that module, so beat read an empty dict, logged
+    # "beat: Starting...", and dispatched nothing for as long as it ran. Queued
+    # OTP mail never left the outbox; the only symptom was a person who never
+    # received an email. Nothing failed, because an empty schedule is a legal
+    # schedule.
+    #
+    # `beat_schedule.py` is now import-free of everything under `workers/`, so
+    # this is an ordinary top-of-file import with no cycle to dodge.
+    beat_schedule=BEAT_SCHEDULE,
 )
 
 

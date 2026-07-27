@@ -10,7 +10,7 @@ Running record of what has been built, what was decided, what broke, and what mu
 | Structure | [`../PROJECT_STRUCTURE.md`](../PROJECT_STRUCTURE.md) |
 | Conventions | [`../CLAUDE.md`](../CLAUDE.md) |
 | Onboarding | [`ONBOARDING.md`](ONBOARDING.md) — concept primers, file map, testing map |
-| Last updated | 2026-07-27 |
+| Last updated | 2026-07-27 (session 8) |
 
 ---
 
@@ -21,7 +21,7 @@ Running record of what has been built, what was decided, what broke, and what mu
 | **0** | Foundation: repo, Docker, `core`, health endpoints, React shell with RTL/i18n, CI | ✅ **Complete and verified** |
 | **1** | Data model, Alembic migration, seed script, integration test harness | ✅ **Complete and verified** |
 | 2 | Auth: invite → OTP → register → login → refresh | ✅ **Complete and verified end to end.** Playwright coverage still owed |
-| 3 | RBAC + admin panel | ⬜ |
+| 3 | Authorization + admin panel | 🟡 **Backend complete and verified.** Admin UI (3B) and Playwright still to come |
 | 4 | Projects, groups, column engine | ⬜ |
 | 5 | Tasks, subtasks, cell editing, drag-drop | ⬜ |
 | 6 | Comments, attachments, WebSocket live updates | ⬜ |
@@ -170,7 +170,7 @@ GET http://localhost:5173/api/v1/        → {"name":"Kavim", ..., "default_loca
 | Cross-module router import contract absent from `.importlinter` | import-linter errors on modules that do not exist yet. Added in Phase 2 alongside the first routers |
 | PWA icons referenced by `manifest.webmanifest` do not exist | Only `favicon.svg` is present. PNG icons land with the PWA work in Phase 8 |
 | Self-hosted Heebo/Inter fonts | System font stack for now; Phase 8 |
-| Nothing committed yet | `git init -b main` was run and `.gitignore` verified (`.env`, `node_modules/`, `.venv/`, `.idea/` all ignored), but no commit has been made — awaiting the go-ahead. CI's `npm ci` needs `frontend/package-lock.json` in that first commit |
+| ~~Nothing committed yet~~ | Resolved in session 2 (`fb83fd9`) |
 
 ---
 
@@ -297,7 +297,7 @@ The demo board demonstrates the column-permission asymmetry that FR-205 exists f
 | Coverage gate still not enforced | Turns on in Phase 2, when `auth` and `permissions` are the modules being measured |
 | `core/permissions.py` has no `require_permission` dependency yet | Phase 3, with the admin panel |
 | Restricted database role for production | The trigger covers the threat; the role split is an operations task for Phase 17 |
-| Nothing committed since `45224b9` | Phase 1 work is uncommitted and unpushed |
+| ~~Nothing committed since `45224b9`~~ | Resolved — Phase 1 shipped in `fb83fd9` |
 
 ---
 
@@ -759,66 +759,260 @@ the flow is fresh.
 
 ---
 
-## Blocked / awaiting external action
+## Session 8 — 2026-07-27 · Phase 3A: authorization and the admin API
 
-These have lead times and are **not** blocked on development. Starting them now keeps them off the critical path.
+CLAUDE.md rule 2 — "never trust the client for authorization" — stops being a rule people
+intend to follow and becomes one they cannot forget to follow.
 
-| # | Item | Blocks | Owner | Notes |
-|---|---|---|---|---|
-| E1 | **Gmail App Password** for `kavimsupport@gmail.com` | Real sending in Phase 2; nothing before that | User | ~2 minutes: enable 2-step verification, then <https://myaccount.google.com/apppasswords>. Development is unblocked meanwhile because `EMAIL_DRY_RUN=true` renders and logs without connecting. **Paste it into `.env`, never into a committed file** |
-| E1b | **Deliverability check against the plant's real mail domain** | Phase 2 acceptance | User | Send one invitation to a real work address early and confirm it does not land in spam. A `@gmail.com` sender to a corporate domain is the risk (SPEC R13). Finding this at pilot instead of now is the expensive version |
-| ~~E2~~ | ~~Twilio account + Israeli sender registration~~ | — | — | **Dropped.** SMS deferred, no provider integrated (SPEC §6.14.1, ADR-007) |
-| E3 | Decision: is **Entra ID SSO** expected within 12 months? | Phase 2 design | User | Changes how much to invest in the password flow. The model keeps `auth_provider` / `external_idp_id` either way |
-| E4 | Decision: required **retention period for quality records** | Audit and soft-delete design | User + QA/compliance | Currently assumed 24 months |
-| E5 | **Existing quality checklists or forms** (photo or Excel of a real one) | Phase 4 default column set and templates | User | Highest-value input available. Turns generic templates into ones that are immediately useful |
-| E6 | **Pilot cohort**: which line, which shift, how many workers | Phase 8 scope | User | |
-| E7 | **Plant Wi-Fi coverage measurement** at the stations workers use | Phase 8 offline scope | User | Determines whether the offline queue needs to be more or less capable than currently planned |
+**257 backend tests** (was 119), **85% coverage** overall and **95%** on `auth` +
+`permissions`, 5/5 import contracts.
+
+### Delivered
+
+| Area | Files |
+|---|---|
+| Layer 3 | `core/permissions.py` — `column_is_editable`, pure and unit-tested against the seeded demo board |
+| Cached resolver | `modules/auth/authz.py` — 5-minute TTL keyed on `(user, project)`, `invalidate_user`, `invalidate_all` |
+| The dependency | `modules/auth/dependencies.py` — `Principal`, `PermissionRequirement`, `require_permission`, `require_authenticated` |
+| Deny by default | `tests/security/test_all_routes_declare_permission.py` — five assertions plus a self-check |
+| Shared schema | `schemas/common.py` — `SchemaBase`, `Page[T]`, keyset cursors, phone normalisation |
+| Self-service | `modules/users/` — `GET`/`PATCH /users/me` |
+| Administration | `modules/admin/` — `roles.py`, `users.py`, `invitations.py`, `audit_log.py`, twelve endpoints |
+| Gates | CI coverage enforced for the first time; `.importlinter` extended to the two new modules |
+
+### The decisions worth knowing
+
+**`require_permission` is an object, not a closure — and that is what makes the security test
+possible.** The test has to read the required permission back off the route table *without
+executing the route*. FastAPI exposes a dependency as `.call` on its dependant node, so a
+frozen dataclass hands the string over directly. A closure would bury it in `__closure__`,
+retrievable only by cell position — meaning a refactor of the factory would silently break the
+one test whose job is catching refactors.
+
+**FastAPI 0.140 does not flatten included routers**, and finding that out was the difference
+between a working test and a vacuous one. `app.include_router()` appends an `_IncludedRouter`
+whose `original_router` holds the real routes, and a nested route's `.path` carries only its
+own prefix. The obvious implementation — iterate `app.routes`, keep the `APIRoute`s — finds
+**zero routes and passes unconditionally**. `test_the_walker_sees_every_published_route`
+cross-checks the traversal against the OpenAPI path set, which FastAPI builds independently,
+so the enumeration can never silently go quiet.
+
+**The permission cache fails soft, and not for `rate_limit.py`'s reason.** That module fails
+*open* — the control is skipped — which is defensible only because a database counter sits
+behind every limit. Nothing is skipped here. This is a read-through cache over a query against
+the source of truth: a miss, a Redis outage, and a corrupt value all take the same branch,
+which is to ask PostgreSQL. A Redis outage costs latency and makes authorization *more*
+current, not less. Failing closed would turn a Redis restart into every user seeing 403 on
+every route, for no security gain at all. The argument is written into the module docstring
+because the two files look alike and somebody will eventually try to harmonise them.
+
+**Invalidate after the commit, never before.** Invalidating first is a live race: a concurrent
+request misses the cache, resolves from the pre-commit state it can still see, and repopulates
+the key with the stale value — which then survives the full five minutes.
+
+**A matrix edit flushes the whole cache rather than enumerating the role's holders.**
+Enumerating is cheaper and is *wrong*: if the same transaction also changed a role assignment,
+the membership list misses somebody whichever side of the change it is read from.
+
+**Layer 3 landed now rather than in Phase 5.** FR-210's permission trace has to show column
+overrides, so deferring it would have meant shipping that endpoint incomplete. The function is
+pure and imports nothing; only its enforcement call sites wait for the cell-write endpoint.
+
+**`seed_roles` was deliberately not fixed.** It only ever *adds* rows, so a re-seed silently
+restores a permission an administrator revoked. That looks like a bug and is the recovery path:
+`DEFAULT_ROLE_MATRIX[SYSTEM_ADMIN]` is every permission, so `seed --reference` is the way back
+from a stripped admin — which is what makes the lockout guard a convenience rather than the
+only thing between an operator and a database shell. Making it reconcile-and-delete would
+destroy every runtime matrix edit on every deploy. Documented at the site and pinned by two
+tests in `test_seed_matrix_interaction.py`.
+
+### Bugs found by running it
+
+**1. Re-inviting an address with a live invitation was a 500.** `create_invitation` added the
+new row and *then* revoked the old one, leaving two `pending` rows for one address at flush
+time — exactly what the partial unique index `uq_invitations_pending_email` forbids. It never
+surfaced in Phase 2 because nothing had yet re-invited anybody; FR-111's resend does it every
+time. Fixed by revoking and flushing first, then inserting. A genuine production defect, not a
+test artefact.
+
+**2. Keyset pagination died on page two.** `encode_cursor` serialises with `default=str`, so a
+timestamp came back as an ISO string and `WHERE (created_at, id) < ($1, $2)` asked PostgreSQL
+to compare `timestamptz` with `text`. Not a silent coercion — `operator does not exist`, a 500.
+`cursor_datetime` parses it back.
+
+**3. Ruff and mypy disagreed about a dict comprehension.** `C416` wanted `dict()`, and `dict()`
+over a SQLAlchemy `Row` sequence loses the type. An explicit loop satisfies both. Recorded
+because the instinct is to add a `noqa` and move on.
+
+**4. `_Base = SchemaBase` produced 24 mypy errors.** An assignment makes the name a *variable*,
+so subclasses lose every field. The alias was replaced with a real rename.
+
+**5. Beat had never dispatched anything, in any environment, ever.** Found by using the system
+rather than by reading it — a real user sat on the OTP screen for two minutes waiting for mail
+that was queued and going nowhere.
+
+`celery -A app.workers.celery_app beat` imports that module and reads `conf.beat_schedule` off
+the app it finds there. The schedule assigned itself onto the app from inside
+`beat_schedule.py` — and **nothing imported `beat_schedule.py`**. Not `celery_app.py`, not
+`include=`, not the worker. So beat read `{}`.
+
+Every component was healthy and every component was right:
+
+| | |
+|---|---|
+| Beat | Logged `beat: Starting...` — an empty schedule is a legal schedule |
+| Worker | Registered `sweep_outbox` correctly (it *is* in `include=`) and waited for a message that was never coming |
+| Outbox rows | `status=pending`, `next_attempt_at` in the past, correctly waiting for a sweeper |
+| `/health/ready` | 200 — it checks Postgres and Redis, both fine |
+
+No exception, no log line, no failed probe. The only observable symptom was a person who never
+received an email. In production this is a **total registration outage that looks healthy from
+every angle you would normally check**.
+
+*Why two sessions of tests missed it.* Session 6 verified the sweeper by calling `sweep()`
+directly and by running `--sweep` from the script. Both bypass Redis, beat, and the worker
+entirely. Twenty tests proved the dispatch *logic* was correct — and it was, all of it. Nothing
+asked whether anything ever calls it on its own. **Testing the function is not testing the
+trigger**, and that generalises well beyond Celery.
+
+*The fix, and a wrong turn worth recording.* The first attempt kept the `SWEEP_TASK_NAME` import
+in `beat_schedule.py` and moved the assignment to the bottom of `celery_app.py` to dodge the
+resulting cycle. That "worked" only when Python entered from the `celery_app` side, and raised
+`ImportError` the moment a test imported `beat_schedule` first — an import graph that resolves
+or explodes depending on entry point is the worst kind of working. `beat_schedule.py` is now
+import-free of everything under `workers/` (task names are literals), the schedule is installed
+in the existing `conf.update(...)` block, and `tests/unit/test_beat_schedule.py` asserts the
+literals against the constants the tasks actually register under.
+
+`app/workers/` went from **0% to 49%** coverage as a result — the boundary that had never been
+tested is now the boundary with a regression test.
+
+### Probes — an assertion nobody has seen fail is not known to work
+
+Four, all run and all reverted:
+
+```
+undeclared route added                 -> A1 FAILED and A5 FAILED  (correct)
+mutation behind require_authenticated  -> A1 passed, A5 FAILED     (correct: escape hatch closed)
+require_permission("user:mange")       -> ValueError at import     (correct)
+require_permission()                   -> ValueError at import     (correct)
+```
+
+The second is the one that matters. Without A5, `require_authenticated()` would become a
+universal exemption and A1 would degrade into "the author typed something".
+
+### Verification evidence
+
+```
+ruff / format   All checks passed!
+mypy --strict   Success: no issues found in 67 source files
+import-linter   Contracts: 5 kept, 0 broken
+pytest          257 passed          (was 119)
+coverage        85% overall · 95% on modules/auth + core/permissions
+```
+
+Declared authorization, read off the live route table:
+
+```
+POST   /api/v1/auth/logout-all                              (authenticated)
+GET    /api/v1/users/me                                     (authenticated)
+PATCH  /api/v1/users/me                                     (authenticated)
+GET    /api/v1/admin/permissions                            user:manage_permissions
+GET    /api/v1/admin/roles                                  user:manage_permissions
+PUT    /api/v1/admin/roles/{role_id}/permissions            user:manage_permissions
+GET    /api/v1/admin/users                                  user:manage
+PATCH  /api/v1/admin/users/{user_id}                        user:manage
+POST   /api/v1/admin/users/{user_id}/force-logout           user:manage
+GET    /api/v1/admin/users/{user_id}/effective-permissions  user:manage_permissions
+POST   /api/v1/admin/invitations                            user:invite
+GET    /api/v1/admin/invitations                            user:invite
+POST   /api/v1/admin/invitations/{invitation_id}/resend     user:invite
+DELETE /api/v1/admin/invitations/{invitation_id}            user:invite
+GET    /api/v1/admin/audit-log                              audit:read
+```
+
+### Where SPEC diverges, and why
+
+- **SPEC §6.1 amended.** It placed `require_permission` in `core/permissions.py`. The
+  dependency needs `Depends(get_db)` and `app.models.user`, and the `core-independence`
+  contract forbids that import. The contract is the stronger constraint; `core/permissions.py`
+  keeps the rules and the pure resolvers, and the machinery lives in `modules/auth/`.
+- **SPEC §13's Phase 3 "done when" cannot be met yet.** *"A manager grants a worker edit rights
+  on one column; the worker can edit that one and is blocked on the rest, in UI and API"* needs
+  the column editor (Phase 4) and the cell-write endpoint (Phase 5). The end-to-end
+  demonstration moves to Phase 5 sign-off, where SPEC §11.3 scenario 6 already lives.
+- **`/admin/notifications/deliveries`** appears under `admin` in §9.3, but §13 assigns the
+  delivery log to Phase 7. Excluded by decision, not oversight.
+
+### Phase 3A acceptance criterion, as actually met
+
+- A worker receives 403 on every `/admin/*` route; an admin receives 200 on all of them.
+- A role-matrix edit takes effect on the affected user's **very next request** — same token, no
+  sleep, no re-login (FR-202).
+- `GET /admin/users/{id}/effective-permissions?project_id=…` reports a worker as editable on
+  `status` and not editable on `verified` for the seeded demo board (FR-205, FR-210).
+- Authorization still enforces correctly with Redis unreachable.
+- `tests/security/test_all_routes_declare_permission.py` is green, and demonstrably fails when
+  a route is added without a declaration.
+
+### Known gaps
+
+| Gap | Consequence |
+|---|---|
+| **No admin UI** | Phase 3B. `features/admin/` is unwritten; no `usePermission` hook, no `RequirePermission` guard, no Table/Modal/Toggle primitives, no `admin` i18n namespace |
+| **Still no Playwright** | The largest outstanding gap, and the only thing that would catch an RTL layout regression |
+| Layer 2 not wired into `require_permission` | No project-scoped route exists yet. `project_param` arrives with `modules/projects` in Phase 4; adding an optional keyword then changes no call site |
+| Layer 3 has no enforcement call site | The resolver is correct and tested; `cells.py` calls it in Phase 5 |
+| `app/workers/` at 49% coverage | Was 0%. `celery_app` and the schedule are now pinned; `tasks_notifications`' Celery boundary (the `asyncio.run` wrapper) is still untested |
+| The worker and beat must be started by hand locally | `celery -A app.workers.celery_app worker --pool=solo` and `… beat`. **`--pool=solo` is required on Windows** — the default prefork pool does not work there. Without both running, queued mail never leaves, which is exactly the defect above |
+| A deploy running `seed --reference` undoes a deliberate matrix revocation | Documented and pinned by tests; check the deployment scripts before relying on FR-203 in production |
+| `lint-imports` needs `PYTHONIOENCODING=utf-8` on a Windows console | Its progress output is Unicode and cp1252 kills it mid-run |
 
 ---
 
-## Next step — Phase 2: Authentication
+## Blocked / awaiting external action
 
-Nothing external blocks this. Email defaults to `EMAIL_DRY_RUN=true`, which renders each
-message and logs it without opening a connection, so the whole flow is testable before the
-App Password exists (E1).
+| # | Item | Blocks | Owner | Status |
+|---|---|---|---|---|
+| ~~E1~~ | ~~**Gmail App Password**~~ | — | — | ✅ **Supplied and configured** in session 8. `.env` carries the real `SMTP_*` block with `EMAIL_ENABLED=true`, `EMAIL_DRY_RUN=false`, and the settings guard accepts it. **The supplied password must be rotated** — it was pasted into a chat transcript, so revoke it and replace it with one typed straight into `.env` |
+| E1b | **Deliverability check against the plant's real mail domain** | Phase 7 acceptance | User | ⏳ **One command away.** Configuration is done and verified; the send itself was blocked by the sandbox because it leaves the machine. Run it and check whether it lands in the inbox or in spam — a `@gmail.com` sender to a corporate domain is SPEC risk R13 |
+| ~~E2~~ | ~~Twilio + Israeli sender registration~~ | — | — | **Dropped.** SMS deferred (SPEC §6.14.1, ADR-007) |
+| ~~E3~~ | ~~Entra ID SSO within 12 months?~~ | — | — | ✅ **Answered: no.** Password auth is the only path. `auth_provider` / `external_idp_id` stay in the schema, unread |
+| ~~E4~~ | ~~Retention period for quality records~~ | — | — | ✅ **Answered: 24 months.** `models/audit.py RETENTION_MONTHS` unchanged; partitioning stays deferred (SPEC R8) |
+| E5 | **Existing quality checklists or forms** (photo or Excel of a real one) | Phase 4 default columns and templates | User | ⏳ **The one worth chasing now.** Longest lead time, biggest payoff — it turns generic templates into ones a line can use on day one |
+| E6 | **Pilot cohort**: which line, which shift, how many workers | Phase 8 scope | User | ⏳ |
+| E7 | **Plant Wi-Fi coverage** at the stations workers use | Phase 8 offline scope | User | ⏳ Determines how capable the offline queue has to be |
+| E8 | Is there an **employee directory to import**, or is every user invited by hand? | Phase 3B invite UX | User | ⏳ New — SPEC §16 Q5, never previously tracked here. Not blocking: the invite API works either way |
 
-**To do**
+---
 
-1. ~~Commit and push Phase 0 + Phase 1~~ — done, `fb83fd9`.
-2. `core/security.py` additions: JWT encode/decode, the short-lived `registration_ticket`, refresh-token rotation helpers.
-3. `core/rate_limit.py` — Redis token bucket: login 10 per 15 min per IP *and* per email, OTP verify 5 per code, OTP request 3 per 15 min per email.
-4. `schemas/auth.py` — Pydantic request/response models; these become the OpenAPI contract the frontend types are generated from.
-5. `modules/auth/` — `invitations.py`, `otp.py`, `passwords.py`, `service.py`, `router.py`. The exact flow is specified in `SPEC.md` §8.1 and must be followed step for step: the registration email comes from the invitation row, never from the submitted form, and the OTP goes to the invited address.
-6. Refresh rotation with **reuse detection** — presenting an already-rotated token revokes the whole `family_id` and emails the user.
-7. `integrations/email.py` (the `EmailSender` protocol and message type) and `integrations/smtp_client.py` (aiosmtplib, STARTTLS on 587, App Password, dry-run, SMTP status-code → typed error mapping). Plus the outbox row written in the same transaction as the invitation. `modules/auth/` depends on the protocol, never on the SMTP client — that seam is what makes a provider swap cheap (ADR-007).
-   - Templates: `modules/notifications/templates/{invitation,otp_code}/` with `he` and `en` subject + body, rendered with Jinja2. Hebrew bodies need `Content-Type: text/html; charset=utf-8` and RTL markup in the HTML part.
-   - `535` (bad App Password) is **not** retryable — dead-letter it and alert, rather than burning five attempts on a credential that will not fix itself.
-8. Add the cross-module router contract to `.importlinter`, and turn on the coverage gate (90% on `auth`).
-9. Frontend `features/auth/`: `InvitationLanding`, `OtpVerify`, `Register`, `Login`, `ForgotPassword` — Hebrew RTL, mobile-first.
-10. Attach the `Authorization` header and refresh-on-401 at the marked seam in `api/client.ts`, with a single-flight guard so concurrent 401s trigger exactly one refresh.
+## Next step
 
-**Done when**
+**Playwright**, then **Phase 3B**, in that order — the sequence chosen at the start of session 8.
 
-- Playwright walks invite → OTP → register → login → refresh → logout in both `he` and `en`
-- An expired or already-consumed invitation returns `410`
-- 10 failed logins lock the account for 15 minutes, and the lock is audited
-- A replayed refresh token revokes the entire family
-- Unknown and known emails are indistinguishable in both response and timing
+1. **Playwright over the Phase 2 auth flow**, both locales: invite → OTP → register → login →
+   refresh → logout. The flow is stable and unchanged, so this locks in behaviour rather than
+   chasing it, and it builds the harness Phase 3B's permission-denial scenario needs
+   (SPEC §11.3 scenario 6).
+2. **Phase 3B — the admin UI.** `features/admin/` with `UserTable`, `RoleMatrix`,
+   `InvitationPanel`, and `AuditLogView`; a `usePermission` hook and a `RequirePermission` route
+   guard; the `admin` i18n namespace in both locales; and the UI primitives none of it can be
+   built without — Table, Modal, Select, Toggle, Badge. The RoleMatrix grid is the highest RTL
+   risk in the project so far: it is the first wide two-dimensional layout, and logical CSS
+   properties are mandatory throughout.
+3. **The visual browser check Phase 2 still owes**, folded into 3B while both locales are
+   already open.
 
-**Verify Phase 1 yourself**
+**Verify Phase 3A yourself**
 
 ```bash
 docker compose -f infra/docker-compose.yml up -d db redis
 cd backend
-uv run alembic upgrade head
+uv run alembic upgrade head          # no new migration in Phase 3
 uv run python -m app.scripts.seed --reset
-uv run pytest                      # 52 passed
+uv run pytest --cov                  # 257 passed, 85%
 ```
 
-**Currently running in this session** (background processes, safe to stop)
-
-```
-uvicorn app.main:app --host 127.0.0.1 --port 8000     # backend
-npm run dev  (frontend, http://localhost:5173)        # Vite
-docker compose -f infra/docker-compose.yml up -d db redis
-```
+Then open <http://localhost:8000/docs>, log in as `worker1@kavim.example.com`
+(`KavimDemo2026!`) and call `GET /admin/users` — 403. Log in as `admin@kavim.example.com` and
+call it again — 200.

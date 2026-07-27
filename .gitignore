@@ -56,3 +56,6 @@ $RECYCLE.BIN/
 npm-debug.log*
 tmp/
 .tmp/
+
+# Celery beat scheduler state — local runtime file, not source.
+celerybeat-schedule*
