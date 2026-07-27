@@ -61,6 +61,23 @@ async def test_security_headers_present(client: AsyncClient) -> None:
     assert "Content-Security-Policy" in response.headers
 
 
+async def test_docs_csp_allows_the_swagger_cdn(client: AsyncClient) -> None:
+    """Swagger UI loads its bundle from jsdelivr, so a 'self'-only script-src
+    renders an empty page with nothing in the console but a CSP refusal."""
+    response = await client.get("/docs")
+    assert response.status_code == 200
+    csp = response.headers["Content-Security-Policy"]
+    assert "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.jsdelivr.net" in csp
+    assert "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net" in csp
+
+
+async def test_cdn_allowance_does_not_leak_to_other_routes(client: AsyncClient) -> None:
+    """The relaxation is scoped to the docs paths. The SPA must never be able to
+    load a script from a third-party origin."""
+    response = await client.get("/health/live")
+    assert "cdn.jsdelivr.net" not in response.headers["Content-Security-Policy"]
+
+
 async def test_unknown_route_returns_problem_json(client: AsyncClient) -> None:
     """Errors use RFC 7807 so the frontend has one shape to parse (SPEC §9.1)."""
     response = await client.get("/api/v1/does-not-exist")

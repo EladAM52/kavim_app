@@ -23,6 +23,14 @@ REQUEST_ID_HEADER = "X-Request-ID"
 # Paths that must not fill the log with noise.
 _QUIET_PATHS = frozenset({"/health/live", "/health/ready", "/metrics", "/favicon.ico"})
 
+# Swagger UI and ReDoc load their bundle from jsdelivr and their favicon from
+# fastapi.tiangolo.com, so the strict CSP blanks the page. These paths get the
+# CDN allowance and nothing else does — the SPA must never depend on it.
+# Production never reaches here: docs_url/redoc_url are None there (main.py).
+_DOCS_PATHS = frozenset({"/docs", "/docs/oauth2-redirect", "/redoc"})
+_DOCS_CDN = "https://cdn.jsdelivr.net"
+_DOCS_FAVICON_HOST = "https://fastapi.tiangolo.com"
+
 
 class RequestContextMiddleware(BaseHTTPMiddleware):
     """Assign a request id, log the request, and time it.
@@ -110,6 +118,15 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
                 "frame-ancestors 'none'; "
                 "base-uri 'self'; "
                 "form-action 'self'"
+            )
+        elif request.url.path in _DOCS_PATHS:
+            csp = (
+                "default-src 'self'; "
+                f"img-src 'self' data: blob: {_DOCS_FAVICON_HOST}; "
+                f"style-src 'self' 'unsafe-inline' {_DOCS_CDN}; "
+                f"script-src 'self' 'unsafe-inline' 'unsafe-eval' {_DOCS_CDN}; "
+                "font-src 'self' data:; "
+                "connect-src 'self'"
             )
         else:
             csp = (
