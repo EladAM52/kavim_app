@@ -5,8 +5,10 @@ Run a worker:
 Run the scheduler (exactly one instance — two double-send every notification):
     celery -A app.workers.celery_app.celery_app beat --loglevel=info
 
-Phase 0 wires up the process and a ``ping`` task so the container boots and the
-broker connection is verifiable. Real tasks land in Phase 7.
+Task modules are listed in ``include`` below. A task that is not listed is not
+registered, and beat scheduling it produces `NotRegistered` at the first tick
+rather than at import — so the list is the thing to check when a scheduled job
+silently never runs.
 """
 
 from __future__ import annotations
@@ -25,7 +27,7 @@ celery_app = Celery(
     "kavim",
     broker=settings.CELERY_BROKER_URL,
     backend=settings.CELERY_RESULT_BACKEND,
-    include=[],  # task modules are appended as they are added
+    include=["app.workers.tasks_notifications"],
 )
 
 celery_app.conf.update(

@@ -54,9 +54,15 @@ forbidden_modules =
 ; Keeps the app portable (SPEC NFR-20) and gives tests one place to stub.
 ; smtplib is listed alongside aiosmtplib on purpose: being in the standard
 ; library makes it *easier* to reach for by accident, not more acceptable.
+; allow_indirect_imports, because the rule is about *direct* imports. Anything
+; that actually sends mail reaches aiosmtplib transitively through the
+; integrations seam — that is the seam working, not a violation. Counting the
+; indirect chain would make the contract unsatisfiable for the sweeper and force
+; it to be weakened or deleted, which is worse than scoping it correctly.
 [importlinter:contract:sdk-containment]
 name = provider clients only inside app.integrations
 type = forbidden
+allow_indirect_imports = True
 source_modules =
     app.core
     app.models

@@ -20,7 +20,7 @@ Running record of what has been built, what was decided, what broke, and what mu
 |---|---|---|
 | **0** | Foundation: repo, Docker, `core`, health endpoints, React shell with RTL/i18n, CI | ✅ **Complete and verified** |
 | **1** | Data model, Alembic migration, seed script, integration test harness | ✅ **Complete and verified** |
-| 2 | Auth: invite → OTP → register → login → refresh | 🟨 **Backend complete and verified. Frontend and the outbox dispatcher outstanding** |
+| 2 | Auth: invite → OTP → register → login → refresh | 🟨 **Backend complete and verified end to end. Frontend outstanding** |
 | 3 | RBAC + admin panel | ⬜ |
 | 4 | Projects, groups, column engine | ⬜ |
 | 5 | Tasks, subtasks, cell editing, drag-drop | ⬜ |
@@ -538,6 +538,122 @@ SENT         dry_run=True accepted=1
 2. **Frontend `features/auth/`** — router, auth store with the access token in memory only, `InvitationLanding`, `OtpVerify`, `Register`, `Login`, `ForgotPassword`, Hebrew RTL mobile-first.
 3. **`api/client.ts`** — attach `Authorization`, refresh-on-401 with a single-flight guard so concurrent 401s trigger exactly one refresh.
 4. **Playwright** — invite → OTP → register → login → refresh → logout in both locales.
+
+---
+
+## Session 6 — 2026-07-27 · The outbox sweeper
+
+The gap that made Phase 2 unusable: mail was queued and never delivered. It is
+delivered now, and **a human can complete registration end to end**.
+
+### Delivered
+
+| File | Role |
+|---|---|
+| `modules/notifications/outbox.py` | Claim with `SKIP LOCKED`, render, send, record. Backoff 1m/5m/25m/2h/10h, dead-letter after 5 |
+| `modules/notifications/quota.py` | Rolling 24-hour recipient count against the Gmail ceiling (FR-714), with an urgent-only reserve |
+| `workers/tasks_notifications.py` | The Celery boundary: `kavim.notifications.sweep_outbox` and a queue-depth probe |
+| `workers/beat_schedule.py` | The sweep every 30s, `expires=25` so a missed tick is dropped rather than queued |
+| Migration `09adde4def09` | `notification_deliveries.recipient_id` nullable, a CHECK that a row names a user *or* an address, and `deferred_quota` added to `delivery_status` |
+
+20 new tests. **119 passing, 83% coverage**, 5/5 import contracts.
+
+### Four real bugs, all found by running it
+
+**1. The delivery log could not cover invitation or OTP mail.** `recipient_id` was
+`NOT NULL`, but both precede the `users` row by design — so there was no record for
+exactly the mail whose failure is most costly: a bad invitation address means the
+user never registers, and nobody could see why. Now nullable, with `destination`
+carrying the address and a CHECK that at least one is present.
+
+**2. A two-millisecond clock skew stalled freshly queued mail.** `next_attempt_at`
+defaults to PostgreSQL's `now()`, and `claim_batch` compared it against the *host*
+clock. Measured skew between the container and the host was 2 ms — enough that a
+just-queued OTP looked not-yet-due and waited for the next tick. It surfaced as
+tests that passed alone and failed in sequence. Fixed by comparing with
+`func.now()`, so both sides come from the database.
+
+**3. Registration returned an empty roles list.** The sessionmaker sets
+`autoflush=False`, so the `UserRole` insert was invisible to `build_identity`'s
+SELECT in the same transaction. The database was correct; the *response* told the
+client it had no roles and no permissions, which would have rendered a
+permission-less shell until the next refresh. Fixed with an explicit flush — and
+the test session now also sets `autoflush=False`, because with autoflush on this
+class of bug passes under test and fails in production.
+
+**4. A read-after-write race on every write endpoint.** Caught in a live run:
+
+```
+18:46:02  POST /auth/register  status=201   user_registered
+18:46:02  POST /auth/login     status=401   "Email or password is incorrect."
+```
+
+The account existed with a valid hash moments later. `get_db` commits in the
+teardown of a `yield` dependency, and **FastAPI runs that after the response has
+been sent** — so a client acting immediately on a 201 can beat the commit. The auth
+router now commits explicitly before responding, at nine points. The dependency's
+commit becomes a no-op and its rollback-on-exception safety net still applies.
+
+This one generalises: *every* write endpoint added from here needs the same
+treatment, or a fast client can observe its own write missing. Worth turning into a
+lint or a shared helper when the next module lands.
+
+### Design decisions
+
+| Decision | Reasoning |
+|---|---|
+| **`asyncio.run` per Celery task, engine disposed inside the same loop** | asyncpg connections belong to the loop that created them; a pooled connection carried into the next task's loop fails with `'NoneType' object has no attribute 'send'`. That exact mistake already cost a session in the seed script. A fresh connection per 30-second sweep is free |
+| **No Celery autoretry on the sweep** | Rows it did not process are still pending and the next tick takes them. Retrying would re-send the ones it *did* process |
+| **`dispatch_row` never raises** | The row's status is the error channel. One malformed message must not stall every message queued behind it — there is a test for exactly that |
+| **A quota deferral does not spend a retry** | The refusal is ours, not the provider's. Charging an attempt for it would dead-letter mail that was never actually attempted |
+| **`deferred_quota` is its own status** | Quiet-hours and quota deferral both mean "deliberately not sent yet", but they send an admin to different places — a user's schedule versus the Gmail ceiling |
+| **`allow_indirect_imports` on the SDK contract** | Anything that actually sends mail reaches `aiosmtplib` transitively through the integrations seam. That is the seam working. Counting the indirect chain made the contract unsatisfiable for the sweeper, so it was scoped to direct imports and re-verified by probe |
+
+### Verification evidence
+
+```
+ruff / format   All checks passed!
+mypy --strict   Success: no issues found in 53 source files
+import-linter   Contracts: 5 kept, 0 broken
+pytest          119 passed   (stable across 3 consecutive runs)
+coverage        83%
+migration       upgrade -> downgrade -> upgrade -> downgrade -> upgrade, 28 tables
+```
+
+The full flow, live, three consecutive runs:
+
+```
+1 landing            200 sixthhire@example.com / עובד
+2 otp requested      202
+3 sweep              claimed=1 sent=1
+4 delivery recorded  status=sent to=sixthhire@example.com recipient_id=None
+5 otp verified       200
+6 registered         201 name='עובד חדש' roles=['WORKER'] perms=7
+7 login              200
+8 invitation spent   410
+```
+
+Hebrew survives the round trip: the stored name is 13 characters in 24 bytes of
+UTF-8. (An earlier `curl` run showed `????` — that was the Windows console mangling
+the request body before it left, not the application. Verified by re-sending through
+a UTF-8 client and comparing stored bytes.)
+
+### Known gaps
+
+| Gap | Consequence |
+|---|---|
+| **No frontend** | Still the blocking item for a usable Phase 2. `features/auth/` is not built; `api/client.ts` has an empty seam |
+| No admin endpoint to create invitations | Only creatable in code. `POST /admin/invitations` is Phase 3 |
+| The Celery worker and beat are not running locally | The sweep was exercised by calling the task directly. Start them with `docker compose --profile app up worker beat`, or run the task by hand as above |
+| `workers/` is at 0% coverage | The Celery boundary is thin and untested; the logic it calls is covered at 90%+ |
+| Quiet hours not applied | The sweeper does not yet consult `quiet_hours_start/end`. Phase 7, with recipient resolution |
+
+### Next step
+
+Frontend `features/auth/`: router, auth store with the access token in memory only,
+`InvitationLanding`, `OtpVerify`, `Register`, `Login`, `ForgotPassword` — Hebrew RTL,
+mobile-first. Then `api/client.ts`: attach `Authorization`, refresh-on-401 with a
+single-flight guard. Then Playwright across both locales.
 
 ---
 

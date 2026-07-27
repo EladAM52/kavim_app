@@ -113,6 +113,12 @@ class NotificationDelivery(Base):
 
     __tablename__ = "notification_deliveries"
     __table_args__ = (
+        # A row naming neither a user nor an address answers no question, so it is
+        # not allowed to exist.
+        CheckConstraint(
+            "recipient_id IS NOT NULL OR destination IS NOT NULL",
+            name="recipient_or_destination_present",
+        ),
         Index("ix_notification_deliveries_recipient", "recipient_id", "created_at"),
         Index("ix_notification_deliveries_outbox", "outbox_id"),
         Index(
@@ -133,8 +139,13 @@ class NotificationDelivery(Base):
     outbox_id: Mapped[int | None] = mapped_column(
         ForeignKey("notification_outbox.id", ondelete="SET NULL"), nullable=True
     )
-    recipient_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    # Nullable, because the auth flow mails people who do not have accounts yet:
+    # an invitation and its OTP both precede the `users` row. Requiring a
+    # recipient id would leave no delivery record for precisely the mail whose
+    # failure is most costly — a bad address means the user never registers at
+    # all. `destination` carries the address in that case.
+    recipient_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=True
     )
     event: Mapped[NotificationEvent] = mapped_column(
         enum_type(NotificationEvent, "notification_event"), nullable=False

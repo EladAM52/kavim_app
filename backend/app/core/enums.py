@@ -158,6 +158,11 @@ class DeliveryStatus(StrEnum):
     SKIPPED_OPTED_OUT = "skipped_opted_out"
     SKIPPED_UNVERIFIED = "skipped_unverified"
     DEFERRED_QUIET_HOURS = "deferred_quiet_hours"
+    # Distinct from quiet hours on purpose. Both mean "not sent yet, on purpose",
+    # but an admin seeing one should check the user's schedule and the other should
+    # check the Gmail ceiling (FR-714). Collapsing them sends people to the wrong
+    # place.
+    DEFERRED_QUOTA = "deferred_quota"
 
 
 # ── files ─────────────────────────────────────────────────────────────────

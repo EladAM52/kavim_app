@@ -124,6 +124,12 @@ async def db(engine: AsyncEngine) -> AsyncGenerator[AsyncSession, None]:
         session = AsyncSession(
             bind=connection,
             expire_on_commit=False,
+            # Matches `get_sessionmaker()`. Not cosmetic: with autoflush on, a
+            # pending INSERT is silently visible to a later SELECT in the same
+            # transaction, so code that forgets to flush passes under test and
+            # returns stale data in production. That exact gap shipped an empty
+            # roles list in the registration response.
+            autoflush=False,
             # A `commit()` inside the code under test releases a savepoint
             # instead of the outer transaction, so the rollback below still
             # discards everything.

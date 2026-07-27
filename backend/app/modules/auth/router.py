@@ -49,6 +49,23 @@ _REGISTRATION_TICKET_TTL_SECONDS = 15 * 60
 DbSession = Annotated[AsyncSession, Depends(get_db)]
 
 
+async def _commit_before_responding(db: AsyncSession) -> None:
+    """Make a write durable *before* the response leaves.
+
+    `get_db` commits in the teardown of a `yield` dependency, and FastAPI runs
+    that after the response has been sent. A client that acts immediately on the
+    response can therefore race the commit — observed in development as
+    `POST /auth/register` returning 201 and the very next `POST /auth/login`
+    returning 401 in the same second, with the account present and its hash valid
+    moments later.
+
+    Committing here closes the window. The dependency's commit then finds nothing
+    to do, and its rollback-on-exception safety net still applies to anything that
+    fails before this point.
+    """
+    await db.commit()
+
+
 def _set_refresh_cookie(response: Response, raw_token: str) -> None:
     response.set_cookie(
         REFRESH_COOKIE,
@@ -147,6 +164,9 @@ async def request_otp(
         ip=client_ip(request),
         user_agent=user_agent(request),
     )
+    # The outbox row must be committed before the 202: the sweeper runs in another
+    # process and can only see committed rows.
+    await _commit_before_responding(db)
     return AcceptedResponse(detail="A verification code is on its way to the invited address.")
 
 
@@ -188,8 +208,13 @@ async def verify_otp(
         user_agent=user_agent(request),
     )
 
+    ticket = create_registration_ticket(invitation.id, invitation.email)
+    # The consumed OTP row and its audit trail must be durable before the ticket
+    # is handed over.
+    await _commit_before_responding(db)
+
     return RegistrationTicket(
-        registration_ticket=create_registration_ticket(invitation.id, invitation.email),
+        registration_ticket=ticket,
         email=invitation.email,
         expires_in_seconds=_REGISTRATION_TICKET_TTL_SECONDS,
     )
@@ -210,11 +235,14 @@ async def register(
     user, access, raw_refresh = await service.register_from_ticket(
         db, payload, ip=client_ip(request), user_agent=user_agent(request)
     )
+    identity = await service.build_identity(db, user)
+    await _commit_before_responding(db)
+
     _set_refresh_cookie(response, raw_refresh)
     return TokenResponse(
         access_token=access,
         expires_in_seconds=settings.ACCESS_TOKEN_TTL_MINUTES * 60,
-        user=await service.build_identity(db, user),
+        user=identity,
     )
 
 
@@ -250,11 +278,16 @@ async def login(
     if ip:
         await rate_limit.reset(rate_limit.LOGIN_PER_IP, ip)
 
+    identity = await service.build_identity(db, user)
+    # The refresh token row must be durable before the client is told it has a
+    # session, or an immediate /auth/refresh races the commit.
+    await _commit_before_responding(db)
+
     _set_refresh_cookie(response, raw_refresh)
     return TokenResponse(
         access_token=access,
         expires_in_seconds=settings.ACCESS_TOKEN_TTL_MINUTES * 60,
-        user=await service.build_identity(db, user),
+        user=identity,
     )
 
 
@@ -282,11 +315,17 @@ async def refresh(request: Request, response: Response, db: DbSession) -> TokenR
         _clear_refresh_cookie(response)
         raise
 
+    identity = await service.build_identity(db, user)
+    # Rotation must be durable before the new cookie is handed over: if the old
+    # token's revocation is not committed and the client retries, the retry looks
+    # like a replay and revokes the whole family.
+    await _commit_before_responding(db)
+
     _set_refresh_cookie(response, new_refresh)
     return TokenResponse(
         access_token=access,
         expires_in_seconds=settings.ACCESS_TOKEN_TTL_MINUTES * 60,
-        user=await service.build_identity(db, user),
+        user=identity,
     )
 
 
@@ -300,6 +339,7 @@ async def logout(request: Request, response: Response, db: DbSession) -> Message
     raw_token = request.cookies.get(REFRESH_COOKIE)
     if raw_token:
         await service.revoke_single_token(db, raw_token)
+        await _commit_before_responding(db)
     _clear_refresh_cookie(response)
     return MessageResponse(detail="Signed out.")
 
@@ -333,6 +373,7 @@ async def logout_all(
         ip=client_ip(request),
         user_agent=user_agent(request),
     )
+    await _commit_before_responding(db)
     _clear_refresh_cookie(response)
     return MessageResponse(detail=f"Signed out of {revoked} session(s).")
 
@@ -359,6 +400,7 @@ async def request_password_reset(
         ip=client_ip(request),
         user_agent=user_agent(request),
     )
+    await _commit_before_responding(db)
     return AcceptedResponse(detail="If that address is registered, a reset link is on its way.")
 
 
@@ -380,6 +422,7 @@ async def confirm_password_reset(
         ip=client_ip(request),
         user_agent=user_agent(request),
     )
+    await _commit_before_responding(db)
     # Every session died, including whatever this browser held.
     _clear_refresh_cookie(response)
     return MessageResponse(detail="Password updated. Please sign in with your new password.")

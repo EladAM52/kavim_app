@@ -348,6 +348,13 @@ async def register_from_ticket(
 
     invitations_mod.mark_consumed(invitation, user.id)
 
+    # Flush before `build_identity` reads back. The sessionmaker sets
+    # autoflush=False, so the UserRole and ProjectMember rows above are invisible
+    # to a SELECT in this same transaction until they are flushed — and the
+    # response would tell the client it has no roles and no permissions, leaving
+    # the SPA rendering a permission-less shell until the next refresh.
+    await db.flush()
+
     await audit.write_audit(
         db,
         action=audit.USER_REGISTERED,
