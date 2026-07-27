@@ -27,6 +27,17 @@ os.environ.setdefault("APP_ENV", "development")
 os.environ.setdefault("LOG_JSON", "false")
 os.environ.setdefault("LOG_LEVEL", "WARNING")
 
+# Captured at conftest import — before any fixture has had a chance to patch
+# them — so `redis_down` can put the *genuine* swallow-and-log helpers back and
+# exercise their try/except for real. Reading them off the module inside the
+# fixture would hand back whatever `permission_cache` already substituted.
+from app.core import redis as _redis
+
+_REAL_REDIS_HELPERS = {
+    name: getattr(_redis, name)
+    for name in ("cache_get_json", "cache_set_json", "cache_delete", "cache_delete_prefix")
+}
+
 
 # ══════════════════════════════════════════════════════════════════════════
 #  unit-level fixtures (no database)
@@ -225,6 +236,69 @@ def rate_limit_counters(monkeypatch: pytest.MonkeyPatch) -> dict[str, int]:
     monkeypatch.setattr(rate_limit, "consume", _fake_consume)
     monkeypatch.setattr(rate_limit, "reset", _fake_reset)
     return counters
+
+
+@pytest.fixture(autouse=True)
+def permission_cache(monkeypatch: pytest.MonkeyPatch) -> dict[str, object]:
+    """Point the permission cache at a per-test in-memory dict.
+
+    The same argument as `rate_limit_counters`. Without it, tests share whatever
+    Redis is on the developer's machine: a permission set cached by one test
+    leaks into the next, so the invalidation tests pass for the wrong reason —
+    or the whole suite fails on a machine with no Redis at all.
+
+    Returned live so a test can inspect the keys directly and assert that an
+    invalidation *deleted* something, rather than inferring it from a status code
+    that a stale cache could also produce.
+    """
+    from app.core import redis
+
+    store: dict[str, object] = {}
+
+    async def _get(key: str) -> object | None:
+        return store.get(key)
+
+    async def _set(key: str, value: object, ttl_seconds: int) -> None:
+        store[key] = value
+
+    async def _delete(*keys: str) -> None:
+        for key in keys:
+            store.pop(key, None)
+
+    async def _delete_prefix(prefix: str) -> int:
+        doomed = [key for key in store if key.startswith(prefix)]
+        for key in doomed:
+            del store[key]
+        return len(doomed)
+
+    monkeypatch.setattr(redis, "cache_get_json", _get)
+    monkeypatch.setattr(redis, "cache_set_json", _set)
+    monkeypatch.setattr(redis, "cache_delete", _delete)
+    monkeypatch.setattr(redis, "cache_delete_prefix", _delete_prefix)
+    return store
+
+
+@pytest.fixture
+def redis_down(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make Redis unreachable, so the real swallow-and-log paths run.
+
+    Two steps, and both are needed. The autouse `permission_cache` has already
+    swapped the helpers for in-memory ones that cannot fail, so this puts the
+    genuine implementations back and *then* breaks `get_redis` underneath them.
+    Patching only `get_redis` would change nothing, because nothing would be
+    calling it.
+
+    Request it explicitly; it is not autouse.
+    """
+    from app.core import redis
+
+    for name, real in _REAL_REDIS_HELPERS.items():
+        monkeypatch.setattr(redis, name, real)
+
+    def _explode() -> object:
+        raise ConnectionError("redis is down (test fixture)")
+
+    monkeypatch.setattr(redis, "get_redis", _explode)
 
 
 @pytest.fixture

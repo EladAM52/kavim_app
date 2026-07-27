@@ -89,6 +89,37 @@ async def make_user(
     return user
 
 
+async def make_admin(db: AsyncSession, **kwargs: Any) -> User:
+    return await make_user(db, role=RoleKey.SYSTEM_ADMIN, **kwargs)
+
+
+async def make_worker(db: AsyncSession, **kwargs: Any) -> User:
+    return await make_user(db, role=RoleKey.WORKER, **kwargs)
+
+
+async def auth_headers(db: AsyncSession, user: User) -> dict[str, str]:
+    """A bearer header for `user`, minted directly rather than via `/auth/login`.
+
+    Nothing is faked: the token comes from the same `create_access_token` the
+    login endpoint calls, signed with the same key, carrying the same claims.
+
+    Going through `/auth/login` would drag three unrelated failure modes into
+    every authorization test — the per-IP throttle, the per-email throttle, and
+    the lockout counter — so a test about permissions could fail because a
+    *different* test spent the login budget. It would also cost an argon2 verify
+    per request, and argon2 is deliberately slow.
+
+    `get_current_user` re-reads the user from the database, and `make_user`
+    flushes, so the token resolves inside the test's open transaction.
+    """
+    from app.core.security import create_access_token
+    from app.modules.auth.service import load_role_keys
+
+    roles = await load_role_keys(db, user.id)
+    token = create_access_token(user.id, email=user.email, roles=roles)
+    return {"Authorization": f"Bearer {token}"}
+
+
 async def make_site_and_line(db: AsyncSession) -> tuple[Site, Line]:
     suffix = uuid.uuid4().hex[:6]
     site = Site(name=f"Site {suffix}", code=f"S-{suffix}")

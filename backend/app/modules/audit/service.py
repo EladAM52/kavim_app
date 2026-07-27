@@ -45,6 +45,16 @@ TOKEN_REUSE_DETECTED: Final = "auth.token_reuse_detected"
 PASSWORD_RESET_REQUESTED: Final = "auth.password_reset_requested"
 PASSWORD_RESET_COMPLETED: Final = "auth.password_reset_completed"
 
+# ── authorization and administration (Phase 3) ────────────────────────────
+PERMISSION_DENIED: Final = "auth.permission_denied"
+USER_ROLE_CHANGED: Final = "user.role_changed"
+USER_ACTIVATED: Final = "user.activated"
+USER_DEACTIVATED: Final = "user.deactivated"
+USER_FORCE_LOGOUT: Final = "user.force_logout"
+USER_PROFILE_UPDATED: Final = "user.profile_updated"
+ROLE_PERMISSIONS_CHANGED: Final = "role.permissions_changed"
+INVITATION_RESENT: Final = "invitation.resent"
+
 # Values that must never reach the audit log even if a caller passes them.
 _REDACTED: Final = frozenset(
     {"password", "password_hash", "token", "token_hash", "code", "code_hash", "secret"}

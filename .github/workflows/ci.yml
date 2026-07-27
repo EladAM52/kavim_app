@@ -88,8 +88,21 @@ jobs:
       - name: Module boundaries (import-linter)
         run: uv run lint-imports
 
+      # `fail_under = 80` has been configured in pyproject.toml since Phase 0 and
+      # never once ran: `addopts` carries no `--cov`, so a bare `pytest` collects
+      # no coverage and the gate has nothing to check. Enabled in Phase 3, when
+      # `auth` and `permissions` are the modules being measured.
       - name: Tests
-        run: uv run pytest
+        run: uv run pytest --cov --cov-report=term-missing
+
+      # CLAUDE.md sets a 90% floor on auth and permissions specifically, and
+      # coverage.py has no per-package `fail_under`. A second report over just
+      # those paths is the mechanical version of that promise.
+      - name: Coverage floor on auth and permissions
+        run: >-
+          uv run coverage report
+          --include="app/modules/auth/*,app/core/permissions.py"
+          --fail-under=90
 
       # Enabled from Phase 1, once migrations exist.
       - name: Migration round-trip

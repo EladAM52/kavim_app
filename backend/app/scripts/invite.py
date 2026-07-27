@@ -4,10 +4,9 @@
     uv run python -m app.scripts.invite worker@example.com --role LINE_MANAGER
     uv run python -m app.scripts.invite --sweep
 
-**A development stand-in for `POST /admin/invitations`**, which lands in Phase 3
-with the admin panel. Until then an invitation can only be created in code, and
-that made the invite flow impossible to try in a browser without writing a script
-each time.
+**A convenience wrapper around `POST /admin/invitations`**, which exists as of
+Phase 3. It calls the same `auth.service.invite_user` the endpoint does, so the
+two cannot drift; what it adds is not needing a bearer token, and `--sweep`.
 
 `--sweep` runs one outbox dispatch and prints any verification code it sent, so the
 flow is completable while `EMAIL_DRY_RUN=true` and no mail actually leaves. That is
@@ -32,14 +31,15 @@ from collections.abc import Sequence
 from sqlalchemy import select
 
 from app.core.config import settings
-from app.core.enums import RoleKey
+from app.core.enums import Locale, RoleKey
 from app.core.logging import configure_logging
 from app.core.time import to_local
 from app.integrations.smtp_client import get_email_sender
 from app.models.notification import NotificationOutbox
 from app.models.role import Role
 from app.models.user import User
-from app.modules.auth.invitations import create_invitation, registration_url
+from app.modules.auth.invitations import registration_url
+from app.modules.auth.service import invite_user
 from app.modules.notifications import outbox
 
 # Any active admin will do as the inviter; the row needs a real `invited_by`.
@@ -73,8 +73,16 @@ async def _create(email: str, role_key: RoleKey) -> int:
             print("no users exist — run: python -m app.scripts.seed")  # noqa: T201
             return 1
 
-        invitation, raw_token = await create_invitation(
-            db, email=email, role_id=role.id, invited_by=inviter.id
+        # The same call `POST /admin/invitations` makes. Since Phase 3 that
+        # endpoint exists, so this script is a convenience rather than the only
+        # way in — and routing both through one function is what stops the shell
+        # path and the API path from becoming two different invitation flows.
+        invitation, raw_token = await invite_user(
+            db,
+            email=email,
+            role_id=role.id,
+            invited_by=inviter.id,
+            locale=Locale(settings.DEFAULT_LOCALE),
         )
         await db.commit()
 

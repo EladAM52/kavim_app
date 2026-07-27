@@ -515,24 +515,31 @@ Wired into CI, conditional on `alembic/versions/` being non-empty.
 
 Worth knowing so you do not go looking:
 
-- No Playwright end-to-end tests. `frontend/e2e/` is Phase 8, though the auth flow gets its
-  first e2e coverage in Phase 2.
-- No `tests/api/` endpoint contract tests — there are no endpoints beyond health yet.
-- No `tests/security/test_all_routes_declare_permission.py`. It arrives with the first real
-  routers, and from then on it fails CI if any route omits its permission declaration.
-- The coverage gate is configured (`fail_under = 80`) but **not enforced** in CI. It turns on
-  in Phase 2, when `auth` and `permissions` are the modules being measured.
-- The cross-module router-import contract is missing from `.importlinter`, because
-  import-linter errors on modules that do not exist yet. Added in Phase 2.
+- **No Playwright end-to-end tests.** `frontend/e2e/` does not exist. This is the largest
+  outstanding gap — it is the coverage that would catch an RTL layout regression, and nothing
+  else does.
+- No `tests/api/` endpoint contract tests. The integration tests exercise endpoints through
+  the real app, so this is a naming gap more than a coverage one.
+- `app/workers/` sits at 0% coverage. The Celery boundary is thin and the logic it calls is
+  covered at 90%+, but the boundary itself is untested.
+
+Two entries that used to live here are now done, and are worth knowing about:
+
+- **`tests/security/test_all_routes_declare_permission.py` exists** as of Phase 3. It walks the
+  whole route table and fails if any route omits its permission declaration — and refuses to
+  let a mutation hide behind `require_authenticated()`. See CLAUDE.md rule 2.
+- **The coverage gate is enforced** as of Phase 3: 80% overall plus a 90% floor on
+  `modules/auth` and `core/permissions`. Before that it was configured and silently never ran,
+  because CI called a bare `pytest` with no `--cov`.
 
 ---
 
 ## 5. Where the project stands
 
-Phases 0 and 1 are complete and verified. Phase 2 (authentication) is next and is not blocked
-on anything external. The authoritative, always-current status is the table at the top of
-[`PROGRESS.md`](PROGRESS.md), followed by the "Next step" section at the bottom — read those
-rather than trusting this paragraph.
+Phases 0, 1, and 2 are complete and verified; Phase 3 (authorization and the admin API) is
+built on the backend, with the admin UI still to come. The authoritative, always-current
+status is the table at the top of [`PROGRESS.md`](PROGRESS.md), followed by the "Next step"
+section at the bottom — read those rather than trusting this paragraph.
 
 In practical terms, what exists today is a running skeleton: containers healthy, migrations
 round-tripping in both directions, a seeded Hebrew demo board in the database, and a React

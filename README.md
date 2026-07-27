@@ -106,4 +106,6 @@ Full annotated tree and creation order: [`PROJECT_STRUCTURE.md`](PROJECT_STRUCTU
 
 ## Status
 
-Phase 0 (foundation) — see [`docs/PROGRESS.md`](docs/PROGRESS.md) for the current state and the next step.
+Phases 0–2 complete; Phase 3 (authorization + admin API) complete on the backend, admin UI still
+to come. See [`docs/PROGRESS.md`](docs/PROGRESS.md) for the current state and the next step —
+that file is the build log and is always more current than this line.

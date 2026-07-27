@@ -23,19 +23,40 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
+from pydantic import EmailStr, Field, field_validator
 
 from app.core.enums import Locale
+from app.schemas.common import (
+    AcceptedResponse,
+    MessageResponse,
+    SchemaBase,
+    normalize_israeli_phone,
+)
 
-
-class _Base(BaseModel):
-    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+# These three moved to `schemas/common.py` when a second module needed them.
+# Re-exported here so every existing import and the generated frontend types
+# keep working unchanged — the class names, and therefore the OpenAPI component
+# names, are identical.
+__all__ = [
+    "AcceptedResponse",
+    "InvitationPreview",
+    "LoginRequest",
+    "MessageResponse",
+    "OtpRequestPayload",
+    "OtpVerifyPayload",
+    "PasswordResetConfirmPayload",
+    "PasswordResetRequestPayload",
+    "RegisterRequest",
+    "RegistrationTicket",
+    "TokenResponse",
+    "UserIdentity",
+]
 
 
 # ══════════════════════════════════════════════════════════════════════════
 #  invitation → OTP → register
 # ══════════════════════════════════════════════════════════════════════════
-class InvitationPreview(_Base):
+class InvitationPreview(SchemaBase):
     """What an invitee is shown on landing, before proving mailbox control.
 
     The email is echoed so the form can display it **read-only** — it is not an
@@ -52,7 +73,7 @@ class InvitationPreview(_Base):
     invited_by_name: str
 
 
-class OtpRequestPayload(_Base):
+class OtpRequestPayload(SchemaBase):
     """The invitation token, and nothing else.
 
     No email field, deliberately. The code goes to the address on the invitation,
@@ -63,12 +84,12 @@ class OtpRequestPayload(_Base):
     token: str = Field(min_length=16, max_length=128)
 
 
-class OtpVerifyPayload(_Base):
+class OtpVerifyPayload(SchemaBase):
     token: str = Field(min_length=16, max_length=128)
     code: str = Field(min_length=6, max_length=6, pattern=r"^\d{6}$")
 
 
-class RegistrationTicket(_Base):
+class RegistrationTicket(SchemaBase):
     """Issued after OTP verification. Scoped `register`, valid 15 minutes.
 
     From here on the raw invitation token is never transmitted again.
@@ -79,7 +100,7 @@ class RegistrationTicket(_Base):
     expires_in_seconds: int
 
 
-class RegisterRequest(_Base):
+class RegisterRequest(SchemaBase):
     """No email field. The address comes from the invitation the ticket names —
     that is what stops a forwarded invitation being redeemed by someone else."""
 
@@ -91,28 +112,19 @@ class RegisterRequest(_Base):
 
     @field_validator("phone")
     @classmethod
-    def _normalize_israeli_phone(cls, value: str | None) -> str | None:
-        """Store E.164. `050-123-4567` and `+972501234567` are the same number,
-        and storing both shapes makes every later comparison unreliable."""
-        if not value:
-            return None
-        digits = "".join(char for char in value if char.isdigit() or char == "+")
-        if digits.startswith("0"):
-            return f"+972{digits[1:]}"
-        if not digits.startswith("+"):
-            return f"+{digits}"
-        return digits
+    def _normalize_phone(cls, value: str | None) -> str | None:
+        return normalize_israeli_phone(value)
 
 
 # ══════════════════════════════════════════════════════════════════════════
 #  login / session
 # ══════════════════════════════════════════════════════════════════════════
-class LoginRequest(_Base):
+class LoginRequest(SchemaBase):
     email: EmailStr
     password: str = Field(min_length=1, max_length=200)
 
 
-class TokenResponse(_Base):
+class TokenResponse(SchemaBase):
     """The access token only.
 
     The refresh token is set as an httpOnly cookie by the endpoint and is
@@ -128,7 +140,7 @@ class TokenResponse(_Base):
     user: UserIdentity
 
 
-class UserIdentity(_Base):
+class UserIdentity(SchemaBase):
     """Enough to render the shell without a second round trip.
 
     `permissions` is a UX affordance for hiding buttons. The server re-checks on
@@ -146,32 +158,13 @@ class UserIdentity(_Base):
 # ══════════════════════════════════════════════════════════════════════════
 #  password reset
 # ══════════════════════════════════════════════════════════════════════════
-class PasswordResetRequestPayload(_Base):
+class PasswordResetRequestPayload(SchemaBase):
     email: EmailStr
 
 
-class PasswordResetConfirmPayload(_Base):
+class PasswordResetConfirmPayload(SchemaBase):
     token: str = Field(min_length=16, max_length=128)
     password: str = Field(min_length=10, max_length=200)
-
-
-# ══════════════════════════════════════════════════════════════════════════
-#  generic
-# ══════════════════════════════════════════════════════════════════════════
-class AcceptedResponse(_Base):
-    """A `202` for endpoints that must not reveal whether anything happened.
-
-    OTP request and password reset both return this whether or not the address
-    exists, because a different response for a known address is a user
-    enumeration oracle (SPEC §8.3).
-    """
-
-    status: str = "accepted"
-    detail: str | None = None
-
-
-class MessageResponse(_Base):
-    detail: str
 
 
 # Resolve the forward reference from TokenResponse.

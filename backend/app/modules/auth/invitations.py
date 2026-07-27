@@ -45,6 +45,13 @@ async def create_invitation(
     Any existing pending invitation for the address is superseded first — the
     partial unique index permits exactly one live invitation per email, so a
     resend would otherwise violate it (FR-111).
+
+    **Order matters, and getting it wrong is a 500.** The old row must be marked
+    revoked *and flushed* before the new one is inserted. Adding the new row
+    first leaves two `pending` rows for one address at flush time, which is
+    exactly what `uq_invitations_pending_email` forbids — so re-inviting an
+    address that already had a live invitation raised `UniqueViolationError`
+    rather than superseding it.
     """
     existing = await db.scalar(
         select(Invitation).where(
@@ -52,6 +59,12 @@ async def create_invitation(
             Invitation.status == InvitationStatus.PENDING,
         )
     )
+
+    if existing is not None:
+        existing.status = InvitationStatus.REVOKED
+        existing.revoked_at = utc_now()
+        # Clears the partial unique index before the replacement is inserted.
+        await db.flush()
 
     raw_token = generate_token()
     invitation = Invitation(
@@ -66,10 +79,8 @@ async def create_invitation(
     db.add(invitation)
 
     if existing is not None:
-        # Flush so `invitation.id` exists before it is referenced.
+        # A second flush, because `superseded_by` needs the new row's id.
         await db.flush()
-        existing.status = InvitationStatus.REVOKED
-        existing.revoked_at = utc_now()
         existing.superseded_by = invitation.id
         logger.info("invitation_superseded", email=email, superseded_by=str(invitation.id))
 

@@ -1,8 +1,11 @@
 """Permission registry and the default role matrix (SPEC §8.4).
 
-This module is **data only** in Phase 1 — the `require_permission` FastAPI
-dependency and the Redis-cached resolver arrive in Phase 3 with the first
-protected routes.
+This module holds the *rules* and no machinery. The `require_permission` FastAPI
+dependency and the Redis-cached resolver live in `modules/auth/` instead, because
+both need `Depends(get_db)` and the `User` model, and the `core-independence`
+contract in `.importlinter` forbids `app.core` importing either. SPEC §6.1 places
+them here; the contract is the stronger constraint and wins. Everything below is
+pure, synchronous, and testable without a database.
 
 Two layers are defined here:
 
@@ -20,6 +23,7 @@ global role permissions ∩ project membership level ∩ column `editable_by_rol
 
 from __future__ import annotations
 
+from collections.abc import Collection, Sequence
 from typing import Final, NamedTuple
 
 from app.core.enums import ProjectPermissionLevel, RoleKey
@@ -196,3 +200,31 @@ def resolve_effective_permissions(
     if project_level is None:
         return frozenset()
     return frozenset(role_permissions) & PROJECT_LEVEL_PERMISSIONS[project_level]
+
+
+# ── layer 3: which roles may write a particular column ────────────────────
+def column_is_editable(
+    editable_by_roles: Sequence[str],
+    role_keys: Collection[str],
+) -> bool:
+    """Whether a holder of ``role_keys`` may write this column (FR-205).
+
+    An empty ``editable_by_roles`` means *no column-level restriction* — anyone
+    who already cleared layers 1 and 2 may write it. That is the documented
+    meaning of the column default in ``models/column.py``.
+
+    Deliberately a boolean rather than a third set folded into
+    ``resolve_effective_permissions``, even though SPEC §8.4 writes the model as a
+    three-way intersection. A column rule is not a permission set: it is a gate on
+    one permission (``task:update:*``) at one place. Folding it in would force
+    every caller to name a column, including the callers that are asking about a
+    whole project. Layers 1 and 2 answer *what may you do*; layer 3 answers *may
+    you do it here*.
+
+    Phase 3 has exactly two callers — this module's tests, and the FR-210
+    permission trace. Enforcement lands in Phase 5 with the cell-write endpoint,
+    which is the first code that can actually deny a write.
+    """
+    if not editable_by_roles:
+        return True
+    return bool(set(editable_by_roles) & set(role_keys))

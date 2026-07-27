@@ -410,7 +410,7 @@ Not a service; the substrate every module depends on. Nothing in `core` may impo
 | `config.py` | `pydantic-settings` `Settings`, loaded once. Every environment variable is declared and typed here. Fails fast at startup on a missing required value |
 | `database.py` | Async SQLAlchemy 2.0 engine, `async_sessionmaker`, `get_db` dependency yielding a session with transaction-per-request |
 | `security.py` | argon2id hash/verify, JWT encode/decode, `secrets`-based token generation, SHA-256 token hashing, 6-digit OTP generation, constant-time comparison helpers |
-| `permissions.py` | Permission string registry, `require_permission(...)` FastAPI dependency, effective-permission resolver with Redis caching and explicit invalidation |
+| `permissions.py` | Permission string registry, the seeded role matrix, and the pure resolvers (`resolve_effective_permissions`, `column_is_editable`). **Rules only, no machinery** — amended in Phase 3: the `require_permission(...)` dependency lives in `modules/auth/dependencies.py` and the Redis-cached resolver in `modules/auth/authz.py`, because both need `Depends(get_db)` and the `User` model, and the `core-independence` contract in `.importlinter` forbids `app.core → app.models`. The contract is the stronger constraint |
 | `rate_limit.py` | Redis token-bucket limiter, applied per route and per identity (IP for anonymous, user id for authenticated) |
 | `exceptions.py` | Application error hierarchy and handlers rendering RFC 7807 `application/problem+json` |
 | `logging.py` | `structlog` JSON output, request-id contextvar propagated into worker tasks |

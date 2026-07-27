@@ -24,7 +24,7 @@ from app.modules.audit import service as audit
 from app.modules.auth import invitations as invitations_mod
 from app.modules.auth import otp as otp_mod
 from app.modules.auth import passwords, service
-from app.modules.auth.dependencies import CurrentUser, client_ip, user_agent
+from app.modules.auth.dependencies import AuthenticatedPrincipal, client_ip, user_agent
 from app.schemas.auth import (
     AcceptedResponse,
     InvitationPreview,
@@ -352,23 +352,28 @@ async def logout(request: Request, response: Response, db: DbSession) -> Message
 async def logout_all(
     request: Request,
     response: Response,
-    current_user: CurrentUser,
+    principal: AuthenticatedPrincipal,
     db: DbSession,
 ) -> MessageResponse:
     """Requires a bearer token, unlike `/logout`.
 
     Revoking every device is a destructive action, so it needs proof of an active
     session rather than mere possession of one cookie.
+
+    Declared with `require_authenticated()` rather than a bare `CurrentUser`: it
+    is a mutation, and `tests/security/test_all_routes_declare_permission.py`
+    requires every mutation to state its authorization explicitly. There is no
+    permission to require here — signing yourself out of your own sessions is
+    identity, not privilege — and saying so is what distinguishes "considered"
+    from "overlooked".
     """
-    revoked = await service.revoke_all_user_tokens(
-        db, current_user.id, TokenRevokeReason.LOGOUT_ALL
-    )
+    revoked = await service.revoke_all_user_tokens(db, principal.id, TokenRevokeReason.LOGOUT_ALL)
     await audit.write_audit(
         db,
         action=audit.LOGOUT_ALL,
         entity_type="user",
-        entity_id=current_user.id,
-        actor_id=current_user.id,
+        entity_id=principal.id,
+        actor_id=principal.id,
         after={"sessions_revoked": revoked},
         ip=client_ip(request),
         user_agent=user_agent(request),

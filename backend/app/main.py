@@ -23,7 +23,9 @@ from app.core.exceptions import register_exception_handlers
 from app.core.logging import configure_logging, get_logger
 from app.core.middleware import register_middleware
 from app.core.redis import check_redis, close_redis
+from app.modules.admin.router import router as admin_router
 from app.modules.auth.router import router as auth_router
+from app.modules.users.router import router as users_router
 
 logger = get_logger(__name__)
 
@@ -124,6 +126,8 @@ def create_app() -> FastAPI:
     # Feature routers mount here as each module lands.
     api = APIRouter(prefix=settings.API_PREFIX)
     api.include_router(auth_router)
+    api.include_router(users_router)
+    api.include_router(admin_router)
 
     @api.get("/", tags=["meta"], summary="API root")
     async def api_root() -> dict[str, Any]:

@@ -10,7 +10,7 @@ Production-line quality review and task management. Monday.com structure — Pro
 
 FastAPI (Python 3.12, `uv`) · PostgreSQL 16 · Redis 7 · Celery · React 19 + TypeScript + Vite + Tailwind v4.
 
-**Flask is not used.** See `docs/adr/001-fastapi-only.md`. Do not add a second backend framework.
+**Flask is not used.** See ADR-001 in [`docs/SPEC.md`](docs/SPEC.md) §15. Do not add a second backend framework.
 
 ## Non-negotiables
 
@@ -49,7 +49,7 @@ No module imports `aiosmtplib`, `smtplib`, or `boto3` directly. This keeps the a
 
 ### 5. Notifications go through the outbox
 
-Never call a provider or `.delay()` a Celery task from inside a request handler. Write a `notification_outbox` row in the same transaction as the domain change; the sweeper dispatches it. See `docs/adr/005-transactional-outbox.md`.
+Never call a provider or `.delay()` a Celery task from inside a request handler. Write a `notification_outbox` row in the same transaction as the domain change; the sweeper dispatches it. See ADR-005 in [`docs/SPEC.md`](docs/SPEC.md) §15.
 
 ### 6. Audit every mutation
 

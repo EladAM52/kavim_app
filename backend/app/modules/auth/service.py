@@ -55,7 +55,7 @@ from app.core.security import (
     waste_password_time,
 )
 from app.core.time import utc_now
-from app.models.auth import RefreshToken
+from app.models.auth import Invitation, RefreshToken
 from app.models.project import ProjectMember
 from app.models.role import Permission, Role, RolePermission, UserRole
 from app.models.user import User
@@ -69,6 +69,72 @@ logger = get_logger(__name__)
 # One message for every login failure. Distinguishing "no such user" from "wrong
 # password" hands an attacker a validated address list.
 _LOGIN_FAILED = "Email or password is incorrect."
+
+
+# ══════════════════════════════════════════════════════════════════════════
+#  invitation (FR-101)
+# ══════════════════════════════════════════════════════════════════════════
+async def invite_user(
+    db: AsyncSession,
+    *,
+    email: str,
+    role_id: uuid.UUID,
+    invited_by: uuid.UUID,
+    project_ids: list[uuid.UUID] | None = None,
+    locale: Locale,
+    ip: str | None = None,
+    user_agent: str | None = None,
+) -> tuple[Invitation, str]:
+    """Create an invitation, audit it, and queue the email. Does **not** commit.
+
+    `invitations_mod.create_invitation` writes the row and nothing else — no audit, no
+    mail. Those three steps belong together, and having them in one place is what
+    stops `POST /admin/invitations` and `scripts/invite.py` from drifting into two
+    subtly different invitation flows.
+
+    The email context supplies exactly the four names the templates use. That is
+    not a coincidence to be maintained by care: `rendering.py` runs Jinja with
+    `StrictUndefined`, so a missing key raises **inside the sweeper**, in another
+    process, minutes later, with nothing pointing back here. The four helpers
+    below are the correct source for each.
+    """
+    invitation, raw_token = await invitations_mod.create_invitation(
+        db, email=email, role_id=role_id, invited_by=invited_by, project_ids=project_ids
+    )
+    role, inviter_name = await invitations_mod.build_preview_context(db, invitation)
+
+    await audit.write_audit(
+        db,
+        action=audit.INVITATION_CREATED,
+        entity_type="invitation",
+        entity_id=invitation.id,
+        actor_id=invited_by,
+        after={
+            "email": email,
+            "role_key": str(role.key),
+            "project_ids": [str(pid) for pid in (project_ids or [])],
+            "expires_at": invitation.expires_at.isoformat(),
+        },
+        ip=ip,
+        user_agent=user_agent,
+    )
+
+    await notifications.queue_email_to_address(
+        db,
+        event=NotificationEvent.INVITATION,
+        email=email,
+        locale=locale,
+        context={
+            "invited_by_name": inviter_name,
+            "role_label": invitations_mod.role_label(role, locale),
+            "registration_url": invitations_mod.registration_url(raw_token),
+            "expires_at_local": invitations_mod.format_expiry(invitation, locale),
+        },
+        entity_type="invitation",
+        entity_id=invitation.id,
+    )
+
+    return invitation, raw_token
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -103,6 +169,14 @@ async def build_identity(db: AsyncSession, user: User) -> UserIdentity:
 
     `permissions` hides buttons; it decides nothing. Every mutation re-checks
     server-side (CLAUDE.md rule 2).
+
+    Calls `load_global_permissions` directly rather than going through
+    `authz.effective_permissions`, for two reasons. `authz` imports this module,
+    so the reverse import would be circular — and it would buy nothing, because
+    with no project and no cache `effective_permissions` *is* this call. What must
+    not happen is caching here: this runs inside the uncommitted transaction of
+    `register` and `login`, so a rollback would leave a cached permission set for
+    a user who does not exist.
     """
     roles = await load_role_keys(db, user.id)
     permissions = await load_global_permissions(db, user.id)

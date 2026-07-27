@@ -87,7 +87,11 @@ source_modules =
     app.modules.auth
     app.modules.audit
     app.modules.notifications
+    app.modules.users
+    app.modules.admin
 forbidden_modules =
     app.modules.auth.router
     app.modules.audit.router
     app.modules.notifications.router
+    app.modules.users.router
+    app.modules.admin.router

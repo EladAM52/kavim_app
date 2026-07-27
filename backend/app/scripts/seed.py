@@ -123,8 +123,29 @@ async def seed_roles(db: AsyncSession, permissions: dict[str, Permission]) -> di
 
     await db.flush()
 
-    # Reset the matrix to the seeded default. Safe because a runtime edit lives
-    # in the same table — see the note below.
+    # Top the matrix back up to the seeded default. Note carefully: this only
+    # *adds* missing rows. It never computes `current - wanted` and never
+    # deletes, so it is a **one-way ratchet toward the defaults**:
+    #
+    #   admin revokes a default permission  →  silently restored by a re-seed
+    #   admin grants a non-default one      →  survives a re-seed untouched
+    #
+    # That asymmetry is deliberate and is load-bearing in both directions.
+    #
+    # Good: `DEFAULT_ROLE_MATRIX[SYSTEM_ADMIN]` is every permission, so
+    # `seed --reference` is the documented way back from a SYSTEM_ADMIN whose
+    # permissions were stripped. It is what makes the lockout guard in
+    # `modules/admin/roles.py` a convenience rather than the only thing standing
+    # between an operator and a database shell.
+    #
+    # Bad: a deploy that runs `seed --reference` will quietly undo a deliberate
+    # revocation. Check the deployment scripts before relying on FR-203 in
+    # production.
+    #
+    # Making this reconcile-and-delete instead would destroy every runtime matrix
+    # edit on every deploy, which is strictly worse. Two tests in
+    # `tests/integration/test_seed_matrix_interaction.py` pin both directions so
+    # this stays a decision rather than becoming a surprise.
     for key, role in existing.items():
         wanted = DEFAULT_ROLE_MATRIX[key]
         current = set(
