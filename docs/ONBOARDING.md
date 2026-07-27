@@ -271,14 +271,16 @@ integrations  → imports only core
 workers       → may import anything (outermost layer)
 ```
 
-Plus one more: `sendgrid`, `twilio`, and `boto3` may be imported **only** inside
+Plus one more: `aiosmtplib`, `smtplib`, and `boto3` may be imported **only** inside
 `app/integrations/`. That keeps the application portable and gives tests one place to stub.
+`smtplib` is on the list precisely *because* it is in the standard library — that makes it
+easier to reach for absent-mindedly, not more acceptable.
 
 ### `backend/app/core/` — the substrate every module imports
 
 | File | Role |
 |---|---|
-| `config.py` | Typed settings from environment variables. A production guard refuses to start if `SECRET_KEY` is the placeholder or under 32 characters, debug or SQL echo is on, the base URL is plaintext HTTP, SendGrid is still in sandbox, or storage is `local` |
+| `config.py` | Typed settings from environment variables. A production guard refuses to start if `SECRET_KEY` is the placeholder or under 32 characters, debug or SQL echo is on, the base URL is plaintext HTTP, email is still in dry-run, or storage is `local`. A second guard runs in *every* environment and rejects a broken SMTP transport — a missing App Password, STARTTLS and implicit TLS both on, or a `From` that Gmail would silently rewrite |
 | `database.py` | Async engine and the `get_db` dependency described in §1 |
 | `redis.py` | Pooled client and fail-soft cache helpers. Uses `SCAN`, never `KEYS` |
 | `logging.py` | structlog. JSON in production, with `request_id` / `user_id` on every line |
@@ -546,9 +548,10 @@ URL (so integration tests silently ran against an empty schema), and a PowerShel
 round-trip corrupting every Hebrew string in `seed.py`. The second one is now a standing rule:
 never pipe source files through PowerShell string replacement — use the editor.
 
-Seven items are waiting on external action (SendGrid domain authentication, Twilio Israeli
-sender registration, and five decisions), listed under "Blocked / awaiting external action" in
-`PROGRESS.md`. None of them block Phase 2.
+A handful of items are waiting on external action — chiefly a Gmail App Password for
+`kavimsupport@gmail.com`, plus several product decisions — listed under "Blocked / awaiting
+external action" in `PROGRESS.md`. None of them block Phase 2: email runs in dry-run mode,
+which renders each message and logs it without opening a connection.
 
 ---
 
@@ -593,11 +596,107 @@ database now; they become usable once Phase 2 ships login.
 | Vite loads but every API call 404s | The backend is not running on `:8000`, or you opened `:8000` directly instead of `:5173` |
 | ESLint fails on a class name you think is fine | It is almost certainly a physical CSS property. Swap to the logical equivalent (§3) |
 | `MissingGreenlet` at runtime | An implicit lazy load. Add an explicit `selectinload` for the relationship |
+| Cannot find a database file to open | There is none — PostgreSQL is a server, not a file. See §7 |
 | Want a completely clean database | `docker compose -f infra/docker-compose.yml down -v`, then repeat steps 1–2. This destroys all local data |
 
 ---
 
-## 7. Before you finish any change
+## 7. Looking inside the database
+
+There is no `.db` file anywhere in the repository, and there is not supposed to be. That is a
+SQLite habit. PostgreSQL is a **server**: it runs inside the `kavim-db` container, and its data
+lives in a Docker named volume called `pgdata`, managed by Docker outside the project folder.
+Nothing about the data lives in your working tree.
+
+That is the point. Every developer gets the same server version with the same behaviour, and
+`docker compose down -v` gives a guaranteed-clean database rather than a file someone forgot to
+delete.
+
+### psql in the container — nothing to install
+
+```bash
+docker exec -it kavim-db psql -U kavim -d kavim
+```
+
+| Command | Shows |
+|---|---|
+| `\dt` | All tables |
+| `\d tasks` | One table's columns, indexes, constraints, and triggers |
+| `\d+ tasks` | The same, plus storage and column comments |
+| `\di` | Indexes |
+| `\df` | Functions — the audit append-only guard lives here |
+| `\l` | Databases |
+| `\x` | Toggle expanded output |
+| `\q` | Quit |
+
+Turn on `\x` before selecting from `tasks`. It has twenty-odd columns and wraps unreadably
+otherwise.
+
+A one-off query without entering the shell:
+
+```bash
+docker exec kavim-db psql -U kavim -d kavim -c "select title, status from tasks limit 5"
+```
+
+A healthy database has 28 tables: the 27 from the data model, plus `alembic_version`, which
+records which migration is currently applied.
+
+### A GUI client — best for browsing
+
+Any PostgreSQL client works. **DBeaver**, **pgAdmin**, or the PostgreSQL extension for VS Code
+(`ms-ossdata.vscode-pgsql`) if you would rather stay in the editor.
+
+```
+Host      localhost
+Port      5432
+Database  kavim
+User      kavim
+Password  kavim_dev_password
+```
+
+This works because `docker-compose.yml` publishes `5432:5432`, mapping the container's port
+onto your machine. If you are running VS Code over WSL2, `localhost` still resolves — WSL
+forwards it.
+
+Those are the development defaults from `.env.example`, committed deliberately. Real
+credentials go in `.env`, which is gitignored and must stay that way.
+
+### The schema as code — best for understanding
+
+The database is generated *from* the repository, so the readable source of truth is checked in:
+
+- [`backend/app/models/`](../backend/app/models/) — 13 files, one per aggregate. Start with
+  `task.py` and `user.py`.
+- `backend/alembic/versions/20260726_1330_f81eb8b34800_initial_schema.py` — the literal DDL
+  that produced all 28 tables, with every index, constraint, function, and trigger.
+
+**Never change the database by hand.** Edit a model, generate a migration, run
+`alembic upgrade head`. Hand-edits are wiped the next time anyone rebuilds, and worse, they
+leave the migrations describing a schema that no longer matches reality — which surfaces on
+someone else's machine, or in CI, long after you have forgotten.
+
+### Where the bytes actually are
+
+```bash
+docker volume inspect kavim_pgdata
+```
+
+A Docker-managed directory inside the WSL2 virtual machine. Treat it as opaque — PostgreSQL's
+on-disk format is not something you read by hand. Use `psql` or a client.
+
+To wipe and rebuild from scratch:
+
+```bash
+docker compose -f infra/docker-compose.yml down -v      # destroys all local data
+docker compose -f infra/docker-compose.yml up -d db redis
+cd backend
+uv run alembic upgrade head
+uv run python -m app.scripts.seed --reset
+```
+
+---
+
+## 8. Before you finish any change
 
 ```bash
 cd backend  && uv run ruff check . && uv run mypy app && uv run lint-imports && uv run pytest
