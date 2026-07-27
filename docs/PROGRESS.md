@@ -9,7 +9,8 @@ Running record of what has been built, what was decided, what broke, and what mu
 | Spec | [`SPEC.md`](SPEC.md) |
 | Structure | [`../PROJECT_STRUCTURE.md`](../PROJECT_STRUCTURE.md) |
 | Conventions | [`../CLAUDE.md`](../CLAUDE.md) |
-| Last updated | 2026-07-26 |
+| Onboarding | [`ONBOARDING.md`](ONBOARDING.md) — concept primers, file map, testing map |
+| Last updated | 2026-07-27 |
 
 ---
 
@@ -297,6 +298,55 @@ The demo board demonstrates the column-permission asymmetry that FR-205 exists f
 | `core/permissions.py` has no `require_permission` dependency yet | Phase 3, with the admin panel |
 | Restricted database role for production | The trigger covers the threat; the role split is an operations task for Phase 17 |
 | Nothing committed since `45224b9` | Phase 1 work is uncommitted and unpushed |
+
+---
+
+## Session 3 — 2026-07-27 · Orientation + CSP fix
+
+### Delivered
+
+- `docs/ONBOARDING.md` — teaching document for someone new to Docker, FastAPI, or React +
+  Vite. Concept primers, the dev and production runtime topologies, a file-by-file map, the
+  testing map, a run-it-yourself sequence, and a troubleshooting table. Links to `SPEC.md`,
+  `PROJECT_STRUCTURE.md`, and this file rather than restating them, so there is still one
+  build log and one contract.
+
+### Problem found and fixed
+
+**`/docs` rendered an empty page.** Swagger UI loads its bundle from `cdn.jsdelivr.net` and
+its favicon from `fastapi.tiangolo.com`, but the development CSP allowed `script-src 'self'`
+only — so the HTML shell arrived, the title rendered, and the browser refused both assets.
+`/openapi.json` was always fine, which is why nothing else looked broken.
+
+Fixed in `core/middleware.py` by branching the CSP on `_DOCS_PATHS` and allowing the CDN
+**only** there. The SPA's CSP is unchanged and must never depend on a third-party origin.
+Production is unaffected either way: `docs_url` and `redoc_url` are `None` there.
+
+Two tests pin both halves — that `/docs` carries the allowance, and that `/health/live` does
+not.
+
+### Verification evidence
+
+```
+ruff           All checks passed!
+ruff format    42 files already formatted
+mypy --strict  Success: no issues found in 34 source files
+import-linter  Contracts: 4 kept, 0 broken
+pytest         54 passed          (27 unit + 27 integration)
+```
+
+Live, after restarting uvicorn:
+
+```
+GET /docs         Content-Security-Policy: … script-src … https://cdn.jsdelivr.net …
+GET /health/live  Content-Security-Policy: … script-src 'self' 'unsafe-inline' 'unsafe-eval'
+GET /health/ready {"status":"ready", … database:"ok", redis:"ok"}
+```
+
+**Worth remembering:** `uvicorn --reload` applied only the first of two edits to the same file
+and then went quiet — the second edit never took effect and the served header stayed stale for
+several minutes. When a change provably passes its test but the running server disagrees,
+restart before debugging the code.
 
 ---
 
