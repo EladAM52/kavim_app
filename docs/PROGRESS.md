@@ -1003,7 +1003,7 @@ GET    /api/v1/admin/audit-log                              audit:read
 | # | Item | Blocks | Owner | Status |
 |---|---|---|---|---|
 | ~~E1~~ | ~~**Gmail App Password**~~ | — | — | ✅ **Supplied and configured** in session 8. `.env` carries the real `SMTP_*` block with `EMAIL_ENABLED=true`, `EMAIL_DRY_RUN=false`, and the settings guard accepts it. **The supplied password must be rotated** — it was pasted into a chat transcript, so revoke it and replace it with one typed straight into `.env` |
-| E1b | **Deliverability check against the plant's real mail domain** | Phase 7 acceptance | User | ⏳ **One command away.** Configuration is done and verified; the send itself was blocked by the sandbox because it leaves the machine. Run it and check whether it lands in the inbox or in spam — a `@gmail.com` sender to a corporate domain is SPEC risk R13 |
+| E1b | **Deliverability check against the plant's real mail domain** | Phase 7 acceptance | User | 🟡 **Half answered (session 11).** Mail sent from the production server reached an `@audiocodes.com` inbox and the recipient completed registration. Whether it lands in inbox or spam across other recipients and domains is still open — SPEC risk R13 |
 | ~~E2~~ | ~~Twilio + Israeli sender registration~~ | — | — | **Dropped.** SMS deferred (SPEC §6.14.1, ADR-007) |
 | ~~E3~~ | ~~Entra ID SSO within 12 months?~~ | — | — | ✅ **Answered: no.** Password auth is the only path. `auth_provider` / `external_idp_id` stay in the schema, unread |
 | ~~E4~~ | ~~Retention period for quality records~~ | — | — | ✅ **Answered: 24 months.** `models/audit.py RETENTION_MONTHS` unchanged; partitioning stays deferred (SPEC R8) |
@@ -1295,13 +1295,13 @@ use on day one.
 
 ---
 
-## Session 11 — 2026-07-28 · Deployment: the production stack and the subpath
+## Session 11 — 2026-07-28 · Deployment: live at srv1515969.hstgr.cloud/kavim
 
-Prepared the first non-development deployment, to `https://srv1515969.hstgr.cloud/kavim` behind the
-host's existing nginx. **275 backend tests** (was 269) · **50 frontend** (was 46) · 30 e2e.
+The first non-development deployment, behind the host's existing nginx, under a subpath.
+**279 backend tests** (was 269) · **50 frontend** (was 46) · 30 e2e.
 
-Nothing has been deployed yet — this session built what a deploy needs and left the localhost setup
-untouched.
+The localhost setup is untouched and still works exactly as before — verified by rebuilding at the
+root and re-running the full e2e suite.
 
 ### Delivered
 
@@ -1370,16 +1370,55 @@ default                 ->  src="/assets/index-DjkWXwqC.js"
 *(Windows note: Git Bash rewrites `/kavim/` into a Windows path, so that check has to run in
 PowerShell or with `MSYS_NO_PATHCONV=1`. It cost a confusing minute; it is in `DEPLOYMENT.md`.)*
 
-### Not done — the deploy itself
+### The deploy, and the three things it found
 
-The server has nothing on it yet. `docs/DEPLOYMENT.md` is the runbook: clone, fill `.env`, build,
-migrate, `seed --reference`, install the nginx snippet, then verify — and the verification step
-that matters is **reloading the page after signing in**, because that is the one that proves the
-cookie path.
+**Kavim is live at `https://srv1515969.hstgr.cloud/kavim`.** Verified in a browser: sign in, reload
+and stay signed in, invite a colleague, and that person received the mail and registered. That
+exercises the subpath end to end — asset base, router basename, API base, and the refresh cookie's
+path — plus the outbox sweeper delivering real Gmail from the server rather than from a laptop.
 
-Secrets must be generated on the server. The Gmail App Password is the one exception, since it
-already exists — and it is still the one that was pasted into a chat transcript in session 8 and
-has never been rotated (E1).
+Three defects, all found by deploying rather than by reading:
+
+**1. Compose never read the repo-root `.env`.** The documented `up` aborted immediately with
+*"required variable POSTGRES_PASSWORD is missing a value"* — a variable plainly present in the file
+the operator had just filled in. Compose resolves `${VAR}` from a `.env` in the *project directory*,
+which defaults to the folder holding the compose file (`infra/`), not the repo root. `env_file:
+../.env` had masked the difference in review: it passes variables *into* containers and does resolve
+relative to the compose file, so the two mechanisms look interchangeable and are not. Every command
+in the runbook now passes `--env-file .env`. The `:?` guards did their job — the alternative was
+Postgres initialising with a blank password.
+
+**2. Port 8000 was already taken**, by another application on the same box. Moved to 4000 — which
+turned out to be the port the server's existing nginx `/kavim/` block *already* proxied to, so no
+nginx change was needed at all. The snippet in `infra/nginx/` remains for a fresh host. Worth
+recording: the nginx port and `BACKEND_PORT` are two places that must agree and nothing enforces it,
+because nginx cannot read `.env`.
+
+**3. There was no way to create the first user.** The real one. A fresh production database has
+reference data and no accounts, and every route in needs somebody already inside:
+`POST /admin/invitations` needs a bearer token; `app.scripts.invite` refuses in production by design
+*and* needs an existing admin as the inviter; `seed.py` refuses demo users. Each guard is correct on
+its own and together they lock the door from the inside.
+
+`app/scripts/bootstrap_admin.py` is the one bootstrap door. It creates a single SYSTEM_ADMIN and
+then **disables itself** — the guard is the state of the database, not `APP_ENV`, so once any active
+user holds `user:manage_permissions` it refuses. It also refuses an address that already exists, so
+it cannot reactivate a deactivated account into an administrator by accident. Password prompted or
+read from stdin, never an argument. Audited, with the new account as its own actor. Four integration
+tests, including the self-disable, because an unexercised guard is an assumption.
+
+**279 backend tests** (was 275).
+
+### Still open after the deploy
+
+- **E1 — the Gmail App Password has still not been rotated.** It was pasted into a chat transcript
+  in session 8, and it is now on a server as well as a laptop. Blocked on Elad's Google account
+  challenge (*"Google couldn't verify this account belongs to you"*), which is unrelated to this
+  system and cannot be resolved from it.
+- **E1b — deliverability**: mail from the server reaches an `@audiocodes.com` inbox, which answers
+  the *delivery* half. Whether it lands in the inbox or in spam for other recipients on other
+  domains is still SPEC risk R13.
+- Nothing is backed up. `pgdata` now holds real accounts and a real audit log.
 
 ### Known gaps
 
