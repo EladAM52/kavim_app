@@ -125,6 +125,12 @@ def create_app() -> FastAPI:
         # origin — `https://host/openapi.json`, outside the app entirely.
         docs_url=None,
         redoc_url=None,
+        # Where "Try it out" should send requests. Without this, Swagger resolves
+        # each path against the origin it fetched the schema from and drops the
+        # prefix — `https://host/api/v1/auth/login`, a 404 on somebody else's
+        # application. This lives in the schema document only; it changes nothing
+        # about how the app routes. Omitted entirely at a host root.
+        servers=[{"url": settings.APP_PUBLIC_PATH}] if settings.APP_PUBLIC_PATH else None,
         # **Not `root_path`.** It looks like the answer and is the opposite of it:
         # `root_path` tells Starlette the prefix is present in incoming paths, so
         # with nginx already stripping `/kavim` every request 404s except the ones

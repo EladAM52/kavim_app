@@ -119,6 +119,10 @@ async def test_the_docs_link_a_schema_url_the_browser_can_resolve() -> None:
     assert page.status_code == 200
     assert "/kavim/openapi.json" in page.text
     assert schema.status_code == 200
+    # And where "Try it out" sends the request. Without this Swagger resolves
+    # each path against the origin and calls `https://host/api/v1/auth/login` —
+    # a 404 on whatever else that host serves, which is what happened.
+    assert schema.json()["servers"] == [{"url": "/kavim"}]
 
 
 async def test_at_a_host_root_the_schema_link_is_unprefixed() -> None:
@@ -130,8 +134,12 @@ async def test_at_a_host_root_the_schema_link_is_unprefixed() -> None:
         app = create_app()
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as client:
             page = await client.get("/docs")
+            schema = await client.get("/openapi.json")
 
     assert '"/openapi.json"' in page.text or "'/openapi.json'" in page.text
+    # No `servers` override: relative resolution against the origin is already
+    # correct when the app is at the root.
+    assert "servers" not in schema.json()
 
 
 async def test_production_docs_still_get_the_cdn_allowance(client: AsyncClient) -> None:
