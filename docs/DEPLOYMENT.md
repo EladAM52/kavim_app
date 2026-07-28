@@ -123,7 +123,15 @@ step 2. The link is valid for `INVITATION_TTL_DAYS` (7).
 ### 4. Wire up nginx
 
 ```bash
+sudo mkdir -p /etc/nginx/snippets
 sudo cp infra/nginx/kavim.conf /etc/nginx/snippets/kavim.conf
+```
+
+If `BACKEND_PORT` in `.env` is not 8000 — because something else on the box already held it — the
+snippet has to follow, or every request is a 502 against a port nothing is listening on:
+
+```bash
+sudo sed -i 's/127.0.0.1:8000/127.0.0.1:9000/g' /etc/nginx/snippets/kavim.conf
 ```
 
 Add to the `http { }` block, once per install:
