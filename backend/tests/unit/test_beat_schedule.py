@@ -75,14 +75,15 @@ def test_the_scheduled_name_matches_the_name_the_task_registers_under() -> None:
     assert BEAT_SCHEDULE["outbox-sweep"]["task"] == SWEEP_TASK_NAME
 
 
-def test_the_outbox_sweep_runs_every_thirty_seconds() -> None:
+def test_the_outbox_sweep_runs_every_ten_seconds() -> None:
     """SPEC §6.8's notification latency budget, pinned.
 
-    Not arbitrary: 30s is the delay a user waiting on an OTP is expected to
-    tolerate. Lengthening it is a product decision, so it should require editing
-    a test rather than only a constant.
+    Not arbitrary: this is the delay a user waiting on an OTP experiences, and
+    they average half of it. Lowered from 30s after the first production use,
+    where 30s read as "the mail never came". Changing it is a product decision,
+    so it should require editing a test rather than only a constant.
     """
-    assert BEAT_SCHEDULE["outbox-sweep"]["schedule"] == timedelta(seconds=30)
+    assert BEAT_SCHEDULE["outbox-sweep"]["schedule"] == timedelta(seconds=10)
 
 
 def test_a_missed_sweep_tick_expires_rather_than_queueing() -> None:

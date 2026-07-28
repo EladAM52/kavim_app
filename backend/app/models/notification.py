@@ -7,8 +7,8 @@ successful enqueue sends a message about a change that never happened. Writing
 the outbox row inside the same transaction as the domain change makes both
 structurally impossible.
 
-The cost is up to 30 seconds of latency on non-urgent notifications, which is
-irrelevant for email and SMS.
+The cost is up to one sweep interval of latency — 10 seconds, see
+`workers/beat_schedule.py` — which is irrelevant for email and SMS.
 """
 
 from __future__ import annotations

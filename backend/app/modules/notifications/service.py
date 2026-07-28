@@ -27,7 +27,7 @@ from app.models.notification import NotificationOutbox
 
 logger = get_logger(__name__)
 
-# Events that must not wait for the next 30-second sweep and must never be
+# Events that must not wait for the next sweep tick and must never be
 # deferred by quiet hours: somebody is sitting at a form waiting for the code.
 URGENT_EVENTS = frozenset(
     {

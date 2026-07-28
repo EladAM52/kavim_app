@@ -61,7 +61,7 @@ def _force_utf8_streams() -> None:
     the subject — *after* the SMTP transaction completes. On a cp1252 console that
     log call raised, the exception escaped past `dispatch_row`'s `except EmailError`
     (a `UnicodeEncodeError` is not one), the transaction rolled back, and the
-    outbox row stayed `pending` despite the mail having gone. The next 30-second
+    outbox row stayed `pending` despite the mail having gone. The next sweep
     tick sent it again. Observed: two deliveries, one row, `attempts=0`, and it
     would have continued indefinitely.
 
