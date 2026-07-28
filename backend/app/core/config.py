@@ -66,6 +66,15 @@ class Settings(BaseSettings):
     APP_PUBLIC_PATH: str = ""
     LOG_LEVEL: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
     LOG_JSON: bool = True
+    # Swagger / ReDoc / openapi.json. `None` means "follow the environment":
+    # on in development, off in production. Setting it explicitly overrides
+    # that, which is the only way to get the docs on a production host.
+    #
+    # Turning it on publishes the complete API surface — every route, every
+    # schema, every admin endpoint. Only do it behind something: the reverse
+    # proxy in `infra/nginx/kavim.conf` returns 404 for the docs paths, so the
+    # supported way to read them is an SSH tunnel to the loopback port.
+    API_DOCS_ENABLED: bool | None = None
 
     # ── security ──────────────────────────────────────────────────────────
     SECRET_KEY: SecretStr = SecretStr(PLACEHOLDER_SECRET)
@@ -165,6 +174,17 @@ class Settings(BaseSettings):
     @property
     def is_gmail_smtp(self) -> bool:
         return self.SMTP_HOST.endswith("gmail.com")
+
+    @property
+    def docs_enabled(self) -> bool:
+        """Whether Swagger, ReDoc, and `openapi.json` are mounted at all.
+
+        Unset follows the environment. Explicit wins — including explicitly
+        `false` in development, for anyone who wants the surface gone.
+        """
+        if self.API_DOCS_ENABLED is None:
+            return not self.is_production
+        return self.API_DOCS_ENABLED
 
     @property
     def refresh_cookie_path(self) -> str:

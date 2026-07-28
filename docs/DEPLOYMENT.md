@@ -200,6 +200,88 @@ Then in a browser, and this is the part worth doing carefully:
 
 ---
 
+## Operator access: Swagger and pgAdmin
+
+Both follow the same rule: **nothing new is published to the internet.** The service binds to
+`127.0.0.1` on the server, and you reach it through an SSH tunnel, which means the access control
+is your SSH key rather than a password on a public port.
+
+### Swagger UI
+
+Off in production by default — `docs_url` is not even mounted. To read it on the server, set in
+`.env`:
+
+```dotenv
+API_DOCS_ENABLED=true
+```
+
+```bash
+docker compose -f infra/docker-compose.prod.yml --env-file .env up -d backend
+```
+
+Then, **from your laptop**:
+
+```bash
+ssh -N -L 8001:127.0.0.1:4000 elada@srv1515969.hstgr.cloud
+```
+
+Leave that running and open <http://localhost:8001/docs>. ReDoc is at `/redoc`, the raw schema at
+`/openapi.json`.
+
+Note the URL: `localhost:8001`, with **no `/kavim`**. The tunnel goes straight to the container's
+port, so you are talking to the application at its root, exactly as it sees itself.
+
+`infra/nginx/kavim.conf` returns 404 for `/kavim/docs`, `/kavim/redoc`, and `/kavim/openapi.json`,
+so enabling the flag is a decision about tunnelled access, not about publishing your whole API
+surface. Verify that after any nginx change:
+
+```bash
+curl -s -o /dev/null -w '%{http_code}\n' https://srv1515969.hstgr.cloud/kavim/openapi.json   # 404
+```
+
+> Logging in through Swagger needs a bearer token. `POST /api/v1/auth/login` returns one; paste it
+> into **Authorize**. The refresh cookie will not work over the tunnel — its path is
+> `/kavim/api/v1/auth` and the tunnel has no `/kavim`, which is the same cookie-path rule as
+> everywhere else in this document.
+
+### pgAdmin (or psql, or DataGrip)
+
+Postgres publishes to `127.0.0.1:5432` **on the server only**. From your laptop:
+
+```bash
+ssh -N -L 5433:127.0.0.1:5432 elada@srv1515969.hstgr.cloud
+```
+
+Then in pgAdmin → *Register → Server*:
+
+| Field | Value |
+|---|---|
+| Host | `localhost` |
+| Port | `5433` |
+| Maintenance database | `kavim` |
+| Username | `kavim` |
+| Password | `POSTGRES_PASSWORD` from the server's `.env` |
+
+Port 5433 locally, deliberately: 5432 is probably your own development Postgres, and pointing
+pgAdmin at the wrong one while running a `DELETE` is a bad afternoon.
+
+For a quick look without pgAdmin, no tunnel needed:
+
+```bash
+docker compose -f infra/docker-compose.prod.yml --env-file .env exec db psql -U kavim -d kavim
+```
+
+**Two things to know before you write anything through pgAdmin.**
+
+`audit_log` is append-only, enforced by a database trigger and not by the application. `UPDATE`
+always fails; `DELETE` fails unless the session sets `SET LOCAL kavim.audit_maintenance = 'on'`.
+That is deliberate — the maintenance job can prune past retention, an operator with a SQL console
+cannot quietly rewrite history.
+
+And a manual `UPDATE` bypasses every guarantee the application makes: no audit row, no cache
+invalidation, no version bump on a cell write, no outbox entry. A permission changed in SQL will
+be served from Redis for up to five minutes. Read freely; write through the app.
+
 ## Updating
 
 ```bash

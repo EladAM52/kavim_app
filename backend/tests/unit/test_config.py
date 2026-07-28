@@ -174,3 +174,26 @@ def test_a_malformed_public_path_fails_at_startup(value: str) -> None:
 def test_an_empty_public_path_is_the_root_deployment() -> None:
     settings = Settings(APP_PUBLIC_PATH="", _env_file=None)  # type: ignore[arg-type]
     assert settings.refresh_cookie_path == "/api/v1/auth"
+
+
+# ══════════════════════════════════════════════════════════════════════════
+#  API documentation exposure
+# ══════════════════════════════════════════════════════════════════════════
+def test_docs_are_on_in_development_and_off_in_production() -> None:
+    assert Settings(_env_file=None).docs_enabled is True  # type: ignore[arg-type]
+    assert Settings(**_prod()).docs_enabled is False  # type: ignore[arg-type]
+
+
+def test_docs_can_be_turned_on_in_production_deliberately() -> None:
+    """The escape hatch for reading the schema on a server.
+
+    Safe only because it is not enough on its own: the reverse proxy 404s the
+    docs paths, so enabling this exposes them to an SSH tunnel and to nothing
+    else (`infra/nginx/kavim.conf`).
+    """
+    settings = Settings(**_prod(API_DOCS_ENABLED=True))  # type: ignore[arg-type]
+    assert settings.docs_enabled is True
+
+
+def test_docs_can_be_turned_off_in_development_too() -> None:
+    assert Settings(API_DOCS_ENABLED=False, _env_file=None).docs_enabled is False  # type: ignore[arg-type]

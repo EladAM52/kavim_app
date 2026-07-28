@@ -112,9 +112,12 @@ def create_app() -> FastAPI:
         version=__version__,
         lifespan=lifespan,
         # Interactive docs are a development affordance, not a public endpoint.
-        docs_url=None if settings.is_production else "/docs",
-        redoc_url=None if settings.is_production else "/redoc",
-        openapi_url=None if settings.is_production else "/openapi.json",
+        # Off in production unless `API_DOCS_ENABLED=true` says otherwise — and
+        # even then the reverse proxy 404s these paths, so the only route to
+        # them is an SSH tunnel to the loopback port (docs/DEPLOYMENT.md).
+        docs_url="/docs" if settings.docs_enabled else None,
+        redoc_url="/redoc" if settings.docs_enabled else None,
+        openapi_url="/openapi.json" if settings.docs_enabled else None,
     )
 
     register_middleware(app)
