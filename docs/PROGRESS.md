@@ -1558,6 +1558,29 @@ same thing. Until its first run there is still a window of pending-but-lapsed ro
 predicate has to match the display rule rather than the column. One test asserting a lapsed
 invitation appears under the `expired` filter and not under `pending` pins both halves at once.
 
+**C. `audit_log.actor_id ON DELETE SET NULL` is unreachable configuration, and it produces a
+bewildering error.** Found by running `DELETE FROM users` in pgAdmin against the dev database:
+
+```
+audit_log is append-only: UPDATE is never permitted
+SQL statement "UPDATE ONLY "public"."audit_log" SET "actor_id" = NULL WHERE $1 = "actor_id""
+```
+
+The FK action makes Postgres issue that `UPDATE` itself, and `kavim_audit_log_guard()` refuses every
+`UPDATE` with no opt-out — only `DELETE` has one, for the retention sweep. So the `SET NULL` branch
+can never execute under any role, owner or superuser included, which is exactly what choosing a
+trigger over grants was for. Two correct guards, and between them a configuration that describes
+something impossible.
+
+`SET NULL` is also the wrong intent even if it worked: nulling the actor is precisely the erasure the
+log exists to prevent. Change the constraint to `ON DELETE RESTRICT` — a migration, plus a test that
+deleting a user with audit history raises a foreign-key violation naming the constraint rather than a
+trigger exception about a table the caller never mentioned. `actor_id` stays nullable; system-initiated
+actions still need it.
+
+Note this makes the impossibility explicit rather than creating it. A user with audit history could
+not be deleted before this change either.
+
 *Not* added, and recorded so the decision is not re-litigated: hard-deleting users (FR-206 is
 deactivation, and a deleted actor turns a signed quality record into an anonymous one), hard-deleting
 invitation rows (they are the evidence of who invited whom, and the unique partial index needs
