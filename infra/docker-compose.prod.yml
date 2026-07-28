@@ -162,6 +162,16 @@ services:
     <<: *backend-base
     container_name: kavim-prod-worker
     command: celery -A app.workers.celery_app.celery_app worker --loglevel=info --concurrency=2
+    # Overrides the image's HTTP probe, which curls /health/live — a worker runs
+    # no web server, so the inherited check can never pass and the container
+    # sits permanently "unhealthy" while working perfectly. An alarm that is
+    # always on is an alarm nobody reads.
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A app.workers.celery_app.celery_app inspect ping -d celery@$$HOSTNAME"]
+      interval: 60s
+      timeout: 15s
+      retries: 3
+      start_period: 40s
 
   # ── Celery beat — MUST remain a single replica ──────────────────────────
   # Two schedulers double-send every notification. The outbox sweeper runs every
@@ -173,6 +183,15 @@ services:
     command: celery -A app.workers.celery_app.celery_app beat --loglevel=info
     deploy:
       replicas: 1
+    # Beat answers nothing — no HTTP, and no `inspect ping`, because it is a
+    # scheduler rather than a worker. There is nothing honest to probe, so the
+    # inherited HTTP check is disabled rather than replaced by a check that
+    # would only ever report the container being alive, which Docker already
+    # knows. Beat failing silently is a real risk (it went unnoticed for two
+    # sessions once); what catches it is the sweep actually running, not a
+    # probe here.
+    healthcheck:
+      disable: true
 
   # ── one-shot migration runner ───────────────────────────────────────────
   # Deliberately not part of `up`. Migrations run when an operator runs them, so
