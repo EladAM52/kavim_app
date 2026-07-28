@@ -1534,3 +1534,34 @@ wired into `require_permission` so authorization layer 2 finally has a call site
 is currently a table nothing reads), the `ProjectMember` management API, and the shell's project
 picker — which also completes the FR-210 permission trace and lets an invitation name projects.
 Dependent on E5: the seeded templates, the default column set, and which column types ship first.
+
+**Added to Phase 4 by decision, session 12.** Both came out of a question about what an administrator
+can delete, and the answer being "less than you would think, mostly on purpose":
+
+**A. The nightly cleanup job — SPEC §6.13's `daily 03:00` entry, which is currently a comment.**
+`beat_schedule.py` runs exactly one job, the outbox sweep; everything else in that file describes
+intent. So nothing prunes anything: expired OTP codes, expired invitations, revoked refresh tokens,
+and soft-deleted rows past their 30-day window all accumulate forever. `workers/tasks_cleanup.py`
+plus a beat entry, each class of row with its own explicitly tested cutoff. It must **not** touch
+`audit_log` — that is the retention sweep's job, it needs `SET LOCAL kavim.audit_maintenance`, and it
+answers to a 24-month period rather than 30 days.
+
+**B. A defect the same conversation exposed: the invitation status filter and the status badge
+disagree.** `invitations.py:170 _display_status()` derives `EXPIRED` at read time from
+`status == PENDING AND expires_at <= now()`, while the stored column stays `pending`.
+`list_invitations()` filters on the column. So filtering by `expired` returns nothing, ever, and
+filtering by `pending` returns rows the table has just labelled expired. Neither half is wrong on its
+own, which is why 286 tests and a browser pass over it — the bug lives in the disagreement.
+
+The cleanup job in **A** is the real fix, because a stamped column makes display and filter mean the
+same thing. Until its first run there is still a window of pending-but-lapsed rows, so the filter
+predicate has to match the display rule rather than the column. One test asserting a lapsed
+invitation appears under the `expired` filter and not under `pending` pins both halves at once.
+
+*Not* added, and recorded so the decision is not re-litigated: hard-deleting users (FR-206 is
+deactivation, and a deleted actor turns a signed quality record into an anonymous one), hard-deleting
+invitation rows (they are the evidence of who invited whom, and the unique partial index needs
+consumed and revoked rows to accumulate), and any endpoint that clears `audit_log` (a trigger refuses
+`UPDATE` and gates `DELETE`, and the application role holds no `DELETE` grant — the threat model
+includes the administrator). If real erasure is ever required for an ex-employee, the shape is
+anonymise-and-keep: scrub name, email, and phone, keep the row and its ID so history stays linked.
