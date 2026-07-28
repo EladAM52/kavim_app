@@ -111,14 +111,33 @@ system genuinely cannot run without.
 ```bash
 docker compose -f infra/docker-compose.prod.yml --env-file .env run --rm backend \
   python -m app.scripts.seed --reference
-
-# Then create the first real administrator by inviting them:
-docker compose -f infra/docker-compose.prod.yml --env-file .env run --rm backend \
-  python -m app.scripts.invite you@audiocodes.com --role SYSTEM_ADMIN
 ```
 
-The invitation is emailed through the outbox, so beat and the worker must be up — they are, from
-step 2. The link is valid for `INVITATION_TTL_DAYS` (7).
+### 3b. The first administrator
+
+A fresh installation has reference data and **no users**, and every normal way in needs somebody
+who is already inside: `POST /admin/invitations` needs a bearer token, and `app.scripts.invite`
+refuses to run in production on purpose — a shell that can mint invitations defeats the point of
+an invitation, which is that it proves a manager sent it. It also needs an existing admin to
+record as the inviter.
+
+So there is exactly one bootstrap door:
+
+```bash
+docker compose -f infra/docker-compose.prod.yml --env-file .env run --rm backend \
+  python -m app.scripts.bootstrap_admin elad.amir@audiocodes.com "Elad Amir"
+```
+
+It prompts for the password twice and never takes it as an argument — arguments land in shell
+history and in `ps`. `run --rm` allocates a TTY, so the prompt works.
+
+**It disables itself.** The guard is the state of the database, not `APP_ENV`: once any active
+user holds `user:manage_permissions`, it refuses. Run it a second time and it says so. Everyone
+after the first person arrives through the invitation flow, which records who invited them.
+
+From here, sign in and invite the rest from **ניהול → הזמנות**. Those invitations are emailed
+through the outbox, so beat and the worker must be up — they are, from step 2 — and each link is
+valid for `INVITATION_TTL_DAYS` (7).
 
 ### 4. Wire up nginx
 
