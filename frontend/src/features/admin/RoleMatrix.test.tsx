@@ -140,6 +140,35 @@ describe('RoleMatrix', () => {
     expect(puts[0]?.body).toEqual({ permission_keys: ['task:create', 'task:delete'] });
   });
 
+  it('counts two holders in Hebrew, which is its own plural category', async () => {
+    // Hebrew CLDR has one / two / many / other, so `_one` and `_other` alone
+    // leave `count: 2` with no match and i18next renders the raw key —
+    // "מנהל מערכתmatrix.holders" on a live screen, spotted by a user. The
+    // original tests used 1 and 3, the exact two categories that were covered.
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: string) => {
+        if (url.includes('/admin/permissions')) return Promise.resolve(jsonResponse(PERMISSIONS));
+        return Promise.resolve(jsonResponse([{ ...ROLES[0], user_count: 2 }]));
+      }),
+    );
+    renderMatrix();
+
+    expect(await screen.findByText('שני משתמשים')).toBeInTheDocument();
+    expect(screen.queryByText(/matrix.holders/)).not.toBeInTheDocument();
+  });
+
+  it('counts two staged changes in Hebrew', async () => {
+    stubApi();
+    const user = userEvent.setup();
+    renderMatrix();
+
+    await user.click(await screen.findByRole('switch', { name: 'task:delete — עובד' }));
+    await user.click(screen.getByRole('switch', { name: 'audit:read — עובד' }));
+
+    expect(screen.getByText('שני שינויים לא נשמרו')).toBeInTheDocument();
+  });
+
   it('discards staged edits without touching the server', async () => {
     const { puts } = stubApi();
     const user = userEvent.setup();
