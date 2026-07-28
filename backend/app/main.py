@@ -13,7 +13,8 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, FastAPI, Response, status
-from fastapi.responses import FileResponse
+from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html
+from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
 from app import __version__
@@ -115,22 +116,26 @@ def create_app() -> FastAPI:
         # Off in production unless `API_DOCS_ENABLED=true` says otherwise — and
         # even then the reverse proxy 404s these paths, so the only route to
         # them is an SSH tunnel to the loopback port (docs/DEPLOYMENT.md).
-        docs_url="/docs" if settings.docs_enabled else None,
-        redoc_url="/redoc" if settings.docs_enabled else None,
+        # The schema itself stays at the root, because that is the path nginx
+        # forwards after stripping the public prefix.
         openapi_url="/openapi.json" if settings.docs_enabled else None,
-        # Behind a proxy that strips a prefix, routing works without this but the
-        # docs page does not: Swagger's HTML references `/openapi.json` at the
-        # origin root, so under /kavim the browser asks the host for
-        # `/openapi.json` and lands on whatever else that host serves.
-        # `root_path` prefixes the URLs FastAPI generates — the schema link and
-        # the "Try it out" server — while incoming paths stay prefix-free
-        # because nginx already removed it. Empty at a host root.
-        root_path=settings.APP_PUBLIC_PATH,
+        # The docs *pages* are registered by hand below, so their link to the
+        # schema can carry the public prefix. FastAPI's built-ins cannot: they
+        # emit `openapi_url` verbatim, which the browser resolves against the
+        # origin — `https://host/openapi.json`, outside the app entirely.
+        docs_url=None,
+        redoc_url=None,
+        # **Not `root_path`.** It looks like the answer and is the opposite of it:
+        # `root_path` tells Starlette the prefix is present in incoming paths, so
+        # with nginx already stripping `/kavim` every request 404s except the ones
+        # that still carry it. That is exactly what happened on the first deploy
+        # of this file — the SPA's HTML loaded and every asset came back 404.
     )
 
     register_middleware(app)
     register_exception_handlers(app)
 
+    _register_docs(app)
     app.include_router(health_router)
 
     # ── /api/v1 ───────────────────────────────────────────────────────────
@@ -155,6 +160,35 @@ def create_app() -> FastAPI:
 
     _mount_spa(app)
     return app
+
+
+def _register_docs(app: FastAPI) -> None:
+    """Swagger and ReDoc, with a schema URL the browser can actually resolve.
+
+    Hand-registered rather than left to `docs_url`/`redoc_url` for one reason:
+    the built-in pages emit `openapi_url` exactly as given, and a root-relative
+    `/openapi.json` is wrong the moment a reverse proxy serves the app under a
+    prefix — the browser asks the *host* for it and gets whatever else lives
+    there. Prefixing the link is all that is needed; the schema route itself
+    stays at the root, because that is the path nginx forwards.
+
+    At a host root `APP_PUBLIC_PATH` is empty and this produces exactly what
+    FastAPI would have produced on its own.
+    """
+    if not settings.docs_enabled:
+        return
+
+    schema_url = f"{settings.APP_PUBLIC_PATH}/openapi.json"
+
+    @app.get("/docs", include_in_schema=False)
+    async def swagger_ui() -> HTMLResponse:
+        return get_swagger_ui_html(openapi_url=schema_url, title=f"{settings.APP_NAME} — API")
+
+    @app.get("/redoc", include_in_schema=False)
+    async def redoc_ui() -> HTMLResponse:
+        return get_redoc_html(openapi_url=schema_url, title=f"{settings.APP_NAME} — API")
+
+    logger.info("docs_mounted", schema_url=schema_url)
 
 
 def _mount_spa(app: FastAPI) -> None:

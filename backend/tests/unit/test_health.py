@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from unittest import mock
 
-from httpx import AsyncClient
+from httpx import ASGITransport, AsyncClient
 
 
 async def test_liveness_is_always_ok(client: AsyncClient) -> None:
@@ -91,22 +91,47 @@ async def test_unknown_route_returns_problem_json(client: AsyncClient) -> None:
     assert "code" in body
 
 
-def test_the_app_carries_the_public_prefix_as_its_root_path() -> None:
-    """Behind a prefix-stripping proxy, this is what makes the docs work.
+async def test_the_docs_link_a_schema_url_the_browser_can_resolve() -> None:
+    """Under a reverse-proxy subpath: prefixed schema link, and **no** root_path.
 
-    Routing is fine without it — nginx already removed `/kavim` — but Swagger's
-    HTML links `/openapi.json` at the origin root, so under a subpath the
-    browser would request it from the host and get whatever else lives there.
-    `root_path` prefixes the URLs FastAPI *generates* without touching the ones
-    it *matches*.
+    `root_path` is the intuitive fix here and it is the opposite of one. It tells
+    Starlette the prefix is present in incoming paths — but nginx strips `/kavim`
+    before proxying, so every request arrives without it and matches nothing.
+    That shipped once and took the deployed app down: the SPA's HTML loaded and
+    every asset came back 404, while `/kavim/assets/...` returned 200.
+
+    Prefixing the one URL the docs page *generates* is the whole fix. The schema
+    route stays at the root, because that is the path nginx forwards.
     """
     from app.core.config import Settings
     from app.main import create_app
 
-    with mock.patch("app.main.settings", Settings(APP_PUBLIC_PATH="/kavim", _env_file=None)):  # type: ignore[arg-type]
+    with_prefix = Settings(  # type: ignore[arg-type]
+        APP_PUBLIC_PATH="/kavim", API_DOCS_ENABLED=True, _env_file=None
+    )
+    with mock.patch("app.main.settings", with_prefix):
         app = create_app()
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as client:
+            page = await client.get("/docs")
+            schema = await client.get("/openapi.json")
 
-    assert app.root_path == "/kavim"
+    assert app.root_path == ""
+    assert page.status_code == 200
+    assert "/kavim/openapi.json" in page.text
+    assert schema.status_code == 200
+
+
+async def test_at_a_host_root_the_schema_link_is_unprefixed() -> None:
+    """The default deployment, unchanged: what FastAPI would emit on its own."""
+    from app.core.config import Settings
+    from app.main import create_app
+
+    with mock.patch("app.main.settings", Settings(API_DOCS_ENABLED=True, _env_file=None)):  # type: ignore[arg-type]
+        app = create_app()
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as client:
+            page = await client.get("/docs")
+
+    assert '"/openapi.json"' in page.text or "'/openapi.json'" in page.text
 
 
 async def test_production_docs_still_get_the_cdn_allowance(client: AsyncClient) -> None:

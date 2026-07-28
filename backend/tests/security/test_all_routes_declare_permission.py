@@ -61,6 +61,14 @@ PUBLIC_ROUTES: frozenset[Route] = frozenset(
         ("POST", "/api/v1/auth/password-reset/request"),  # pre-authentication
         ("POST", "/api/v1/auth/password-reset/confirm"),  # the token is the credential
         ("POST", "/api/v1/auth/phone/verify/request"),  # deferred stub, always 400
+        # API documentation. Unauthenticated *in the application* by design, and
+        # never mounted at all unless API_DOCS_ENABLED says so — off by default in
+        # production. Where they are exposed, the reverse proxy demands HTTP Basic
+        # credentials (`infra/nginx/kavim.conf`), so the access control is there
+        # rather than here. They read nothing: every documented route still
+        # enforces its own permission when called.
+        ("GET", "/docs"),
+        ("GET", "/redoc"),
     }
 )
 
