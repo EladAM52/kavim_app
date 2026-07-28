@@ -22,9 +22,22 @@ import heCommon from '../src/locales/he/common.json' with { type: 'json' };
 import { uniqueEmail } from './support/backend';
 import { ADMIN_EMAIL, WORKER_EMAIL, signIn } from './support/session';
 
+/**
+ * A union, not `typeof heAdmin`.
+ *
+ * The two namespaces are deliberately *not* the same shape: Hebrew's CLDR plural
+ * categories are one / two / many / other, so `holders_two` and `holders_many`
+ * exist there and have no English equivalent. Typing this as the Hebrew file
+ * claims they are interchangeable, which stopped compiling the moment they
+ * diverged — and because `npm run build` type-checks every project, that broke a
+ * production image build over a test-only type.
+ *
+ * A union permits only the keys both files share, which is exactly what a spec
+ * running in both locales may use.
+ */
 function stringsFor(projectName: string): {
-  admin: typeof heAdmin;
-  common: typeof heCommon;
+  admin: typeof heAdmin | typeof enAdmin;
+  common: typeof heCommon | typeof enCommon;
   hebrew: boolean;
   dir: 'rtl' | 'ltr';
 } {
