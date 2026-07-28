@@ -5,11 +5,20 @@
 #  there are no bind mounts, no reload, and the frontend is baked into the
 #  backend image rather than served by Vite.
 #
-#  On the server:
-#    cd /opt/kavim
+#  On the server, from the REPO ROOT:
 #    cp infra/env.production.example .env      # then fill it in — see the file
-#    docker compose -f infra/docker-compose.prod.yml up -d --build
-#    docker compose -f infra/docker-compose.prod.yml run --rm migrate
+#    docker compose -f infra/docker-compose.prod.yml --env-file .env up -d --build
+#    docker compose -f infra/docker-compose.prod.yml --env-file .env run --rm migrate
+#
+#  `--env-file .env` is required, not decorative. Compose resolves ${VAR} from a
+#  .env in the *project directory*, which defaults to the directory holding the
+#  compose file — `infra/`, not the repo root. Without the flag every ${...}
+#  below is empty and the `:?` guards abort the run with
+#  "required variable POSTGRES_PASSWORD is missing a value".
+#
+#  `env_file: ../.env` is a different mechanism: it passes variables *into* the
+#  containers, and its path is relative to this file. Both point at the same
+#  repo-root .env, which is why one file serves both.
 #
 #  Only the backend publishes a port, and only on the loopback interface:
 #  nginx terminates TLS and proxies to it (see infra/nginx/kavim.conf).

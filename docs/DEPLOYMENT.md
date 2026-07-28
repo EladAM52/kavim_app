@@ -77,16 +77,26 @@ if it is ever rotated, both copies change.
 ### 2. Build and start
 
 ```bash
-docker compose -f infra/docker-compose.prod.yml up -d --build
+docker compose -f infra/docker-compose.prod.yml --env-file .env up -d --build
 ```
 
 The build compiles the SPA with `VITE_BASE_PATH=/kavim/` and copies it into the backend image, so
 the first build is slow and later ones are cached.
 
+**`--env-file .env` is required on every compose command here**, and it is easy to lose. Compose
+resolves `${VAR}` from a `.env` in the *project directory*, which defaults to the folder holding
+the compose file — `infra/`, not the repo root. Without the flag every variable is empty and the
+`:?` guards stop the run with *"required variable POSTGRES_PASSWORD is missing a value"*. That is
+the guards working: the alternative is Postgres silently initialising with a blank password.
+
+`env_file: ../.env` inside the compose file is a *different* mechanism — it passes variables into
+the containers, and its path is relative to the compose file. Both end up at the same repo-root
+`.env`.
+
 ### 3. Migrate, then seed
 
 ```bash
-docker compose -f infra/docker-compose.prod.yml run --rm migrate
+docker compose -f infra/docker-compose.prod.yml --env-file .env run --rm migrate
 ```
 
 Migrations are a deliberate one-shot command, not part of `up`. A container that restarts at 3am
@@ -99,11 +109,11 @@ production"*. Reference data is the permissions, the roles, and the seeded role 
 system genuinely cannot run without.
 
 ```bash
-docker compose -f infra/docker-compose.prod.yml run --rm backend \
+docker compose -f infra/docker-compose.prod.yml --env-file .env run --rm backend \
   python -m app.scripts.seed --reference
 
 # Then create the first real administrator by inviting them:
-docker compose -f infra/docker-compose.prod.yml run --rm backend \
+docker compose -f infra/docker-compose.prod.yml --env-file .env run --rm backend \
   python -m app.scripts.invite you@audiocodes.com --role SYSTEM_ADMIN
 ```
 
@@ -141,7 +151,7 @@ sudo nginx -t && sudo systemctl reload nginx
 
 ```bash
 # 1. The stack is healthy
-docker compose -f infra/docker-compose.prod.yml ps
+docker compose -f infra/docker-compose.prod.yml --env-file .env ps
 
 # 2. The API answers locally, before nginx is in the picture
 curl -s localhost:8000/health/ready
@@ -168,8 +178,8 @@ Then in a browser, and this is the part worth doing carefully:
 ```bash
 cd /opt/kavim
 git pull
-docker compose -f infra/docker-compose.prod.yml up -d --build
-docker compose -f infra/docker-compose.prod.yml run --rm migrate
+docker compose -f infra/docker-compose.prod.yml --env-file .env up -d --build
+docker compose -f infra/docker-compose.prod.yml --env-file .env run --rm migrate
 ```
 
 Rebuild is required for a frontend change even when nothing in the backend moved: the SPA lives
@@ -183,7 +193,7 @@ Phase 6).
 
 ```bash
 # Postgres, to a file on the host
-docker compose -f infra/docker-compose.prod.yml exec -T db \
+docker compose -f infra/docker-compose.prod.yml --env-file .env exec -T db \
   pg_dump -U kavim kavim | gzip > "kavim-$(date +%F).sql.gz"
 ```
 
