@@ -118,6 +118,14 @@ def create_app() -> FastAPI:
         docs_url="/docs" if settings.docs_enabled else None,
         redoc_url="/redoc" if settings.docs_enabled else None,
         openapi_url="/openapi.json" if settings.docs_enabled else None,
+        # Behind a proxy that strips a prefix, routing works without this but the
+        # docs page does not: Swagger's HTML references `/openapi.json` at the
+        # origin root, so under /kavim the browser asks the host for
+        # `/openapi.json` and lands on whatever else that host serves.
+        # `root_path` prefixes the URLs FastAPI generates — the schema link and
+        # the "Try it out" server — while incoming paths stay prefix-free
+        # because nginx already removed it. Empty at a host root.
+        root_path=settings.APP_PUBLIC_PATH,
     )
 
     register_middleware(app)

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from unittest import mock
+
 from httpx import AsyncClient
 
 
@@ -87,3 +89,21 @@ async def test_unknown_route_returns_problem_json(client: AsyncClient) -> None:
     assert body["status"] == 404
     assert body["instance"] == "/api/v1/does-not-exist"
     assert "code" in body
+
+
+def test_the_app_carries_the_public_prefix_as_its_root_path() -> None:
+    """Behind a prefix-stripping proxy, this is what makes the docs work.
+
+    Routing is fine without it — nginx already removed `/kavim` — but Swagger's
+    HTML links `/openapi.json` at the origin root, so under a subpath the
+    browser would request it from the host and get whatever else lives there.
+    `root_path` prefixes the URLs FastAPI *generates* without touching the ones
+    it *matches*.
+    """
+    from app.core.config import Settings
+    from app.main import create_app
+
+    with mock.patch("app.main.settings", Settings(APP_PUBLIC_PATH="/kavim", _env_file=None)):  # type: ignore[arg-type]
+        app = create_app()
+
+    assert app.root_path == "/kavim"

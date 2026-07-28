@@ -206,43 +206,79 @@ Both follow the same rule: **nothing new is published to the internet.** The ser
 `127.0.0.1` on the server, and you reach it through an SSH tunnel, which means the access control
 is your SSH key rather than a password on a public port.
 
-### Swagger UI
+### Swagger UI, at /kavim/docs behind a password
 
-Off in production by default — `docs_url` is not even mounted. To read it on the server, set in
-`.env`:
+**Two switches, both of which must be on.** FastAPI does not mount the docs at all unless
+`API_DOCS_ENABLED=true`, and nginx demands HTTP Basic credentials for those paths. Either one alone
+keeps them shut.
+
+Swagger does not bypass authorization — every route still enforces `require_permission`, so nobody
+reads data from it. What it publishes is the *map*: every endpoint, every field, every validation
+rule, every admin route. `openapi.json` at a predictable path is also precisely what automated
+scanners probe for, which is why it is not left open.
+
+**1. Let the application serve them.** In `.env` on the server:
 
 ```dotenv
 API_DOCS_ENABLED=true
 ```
 
 ```bash
-docker compose -f infra/docker-compose.prod.yml --env-file .env up -d backend
+docker compose -f infra/docker-compose.prod.yml --env-file .env up -d --build backend
 ```
 
-Then, **from your laptop**:
+**2. Create the password file**, as root, once:
+
+```bash
+sudo apt-get install -y apache2-utils
+sudo htpasswd -c /etc/nginx/kavim.htpasswd elad          # prompts for a password
+sudo chown root:www-data /etc/nginx/kavim.htpasswd
+sudo chmod 640 /etc/nginx/kavim.htpasswd
+```
+
+Adding a second person later uses `htpasswd` **without** `-c` — with it, the file is recreated and
+everyone else is removed.
+
+**3. Add the location block** to the server block for `srv1515969.hstgr.cloud` (it is in
+`infra/nginx/kavim.conf`; adjust `127.0.0.1:8000` to your `BACKEND_PORT`):
+
+```nginx
+location ~ ^/kavim/(docs|redoc|openapi\.json)$ {
+    auth_basic           "Kavim API docs";
+    auth_basic_user_file /etc/nginx/kavim.htpasswd;
+    proxy_pass http://127.0.0.1:4000/$1$is_args$args;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-Proto $scheme;
+}
+```
+
+It must come **before** the general `location /kavim/` block in the file — nginx prefers a matching
+regex location over a prefix one, but keeping them in reading order avoids the question entirely.
+
+```bash
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+Then open <https://srv1515969.hstgr.cloud/kavim/docs> and enter the credentials.
+
+**Why `root_path` matters here.** Swagger's HTML links `/openapi.json` at the origin root. Because
+nginx strips `/kavim`, the app would generate a link the browser resolves against the host — landing
+on whatever else that host serves. `main.py` passes `root_path=APP_PUBLIC_PATH`, which prefixes the
+URLs FastAPI *generates* without changing the paths it *matches*. Get a docs page that renders but
+reports "Failed to load API definition", and this is the setting to check.
+
+> Calling an endpoint from Swagger needs a bearer token: `POST /api/v1/auth/login` returns one,
+> paste it into **Authorize**. Requests go against **production data** — there is no separate
+> environment, so a `DELETE` from that page is a real delete.
+
+**Alternative, no password file, nothing public:** an SSH tunnel.
 
 ```bash
 ssh -N -L 8001:127.0.0.1:4000 elada@srv1515969.hstgr.cloud
 ```
 
-Leave that running and open <http://localhost:8001/docs>. ReDoc is at `/redoc`, the raw schema at
-`/openapi.json`.
-
-Note the URL: `localhost:8001`, with **no `/kavim`**. The tunnel goes straight to the container's
-port, so you are talking to the application at its root, exactly as it sees itself.
-
-`infra/nginx/kavim.conf` returns 404 for `/kavim/docs`, `/kavim/redoc`, and `/kavim/openapi.json`,
-so enabling the flag is a decision about tunnelled access, not about publishing your whole API
-surface. Verify that after any nginx change:
-
-```bash
-curl -s -o /dev/null -w '%{http_code}\n' https://srv1515969.hstgr.cloud/kavim/openapi.json   # 404
-```
-
-> Logging in through Swagger needs a bearer token. `POST /api/v1/auth/login` returns one; paste it
-> into **Authorize**. The refresh cookie will not work over the tunnel — its path is
-> `/kavim/api/v1/auth` and the tunnel has no `/kavim`, which is the same cookie-path rule as
-> everywhere else in this document.
+Then <http://localhost:8001/docs> — note there is no `/kavim` in that URL, because the tunnel
+reaches the container directly and the app is at its own root there.
 
 ### pgAdmin (or psql, or DataGrip)
 
