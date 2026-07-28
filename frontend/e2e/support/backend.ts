@@ -17,7 +17,10 @@ import { promisify } from 'node:util';
 
 const run = promisify(execFile);
 
-const BACKEND_DIR = new URL('../../../backend', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1');
+const BACKEND_DIR = new URL('../../../backend', import.meta.url).pathname.replace(
+  /^\/([A-Za-z]:)/,
+  '$1',
+);
 
 async function invite(args: string[]): Promise<string> {
   const { stdout } = await run('uv', ['run', 'python', '-m', 'app.scripts.invite', ...args], {

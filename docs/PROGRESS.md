@@ -10,7 +10,7 @@ Running record of what has been built, what was decided, what broke, and what mu
 | Structure | [`../PROJECT_STRUCTURE.md`](../PROJECT_STRUCTURE.md) |
 | Conventions | [`../CLAUDE.md`](../CLAUDE.md) |
 | Onboarding | [`ONBOARDING.md`](ONBOARDING.md) — concept primers, file map, testing map |
-| Last updated | 2026-07-27 (session 8) |
+| Last updated | 2026-07-28 (session 10) |
 
 ---
 
@@ -20,8 +20,8 @@ Running record of what has been built, what was decided, what broke, and what mu
 |---|---|---|
 | **0** | Foundation: repo, Docker, `core`, health endpoints, React shell with RTL/i18n, CI | ✅ **Complete and verified** |
 | **1** | Data model, Alembic migration, seed script, integration test harness | ✅ **Complete and verified** |
-| 2 | Auth: invite → OTP → register → login → refresh | ✅ **Complete and verified end to end.** Playwright coverage still owed |
-| 3 | Authorization + admin panel | 🟡 **Backend complete and verified.** Admin UI (3B) and Playwright still to come |
+| 2 | Auth: invite → OTP → register → login → refresh | ✅ **Complete and verified end to end**, including Playwright in both locales |
+| 3 | Authorization + admin panel | ✅ **Complete and verified.** 3A backend, 3B admin UI, 16 admin e2e tests. The SPEC §13 "done when" needs the column editor and waits for Phase 5 |
 | 4 | Projects, groups, column engine | ⬜ |
 | 5 | Tasks, subtasks, cell editing, drag-drop | ⬜ |
 | 6 | Comments, attachments, WebSocket live updates | ⬜ |
@@ -1010,40 +1010,33 @@ GET    /api/v1/admin/audit-log                              audit:read
 | E5 | **Existing quality checklists or forms** (photo or Excel of a real one) | Phase 4 default columns and templates | User | ⏳ **The one worth chasing now.** Longest lead time, biggest payoff — it turns generic templates into ones a line can use on day one |
 | E6 | **Pilot cohort**: which line, which shift, how many workers | Phase 8 scope | User | ⏳ |
 | E7 | **Plant Wi-Fi coverage** at the stations workers use | Phase 8 offline scope | User | ⏳ Determines how capable the offline queue has to be |
-| E8 | Is there an **employee directory to import**, or is every user invited by hand? | Phase 3B invite UX | User | ⏳ New — SPEC §16 Q5, never previously tracked here. Not blocking: the invite API works either way |
+| E8 | Is there an **employee directory to import**, or is every user invited by hand? | Bulk invite, if it is needed at all | User | ⏳ Still open. The Phase 3B panel invites one address at a time, which is right for a 50-person pilot invited by hand and wrong for a directory import. Answer decides whether bulk invite is built |
 
 ---
 
 ## Next step
 
-**Playwright**, then **Phase 3B**, in that order — the sequence chosen at the start of session 8.
+**Phase 4 — projects, groups, and the column engine.** Details at the end of session 10.
 
-1. **Playwright over the Phase 2 auth flow**, both locales: invite → OTP → register → login →
-   refresh → logout. The flow is stable and unchanged, so this locks in behaviour rather than
-   chasing it, and it builds the harness Phase 3B's permission-denial scenario needs
-   (SPEC §11.3 scenario 6).
-2. **Phase 3B — the admin UI.** `features/admin/` with `UserTable`, `RoleMatrix`,
-   `InvitationPanel`, and `AuditLogView`; a `usePermission` hook and a `RequirePermission` route
-   guard; the `admin` i18n namespace in both locales; and the UI primitives none of it can be
-   built without — Table, Modal, Select, Toggle, Badge. The RoleMatrix grid is the highest RTL
-   risk in the project so far: it is the first wide two-dimensional layout, and logical CSS
-   properties are mandatory throughout.
-3. **The visual browser check Phase 2 still owes**, folded into 3B while both locales are
-   already open.
-
-**Verify Phase 3A yourself**
+**Verify Phase 3 yourself**
 
 ```bash
 docker compose -f infra/docker-compose.yml up -d db redis
 cd backend
 uv run alembic upgrade head          # no new migration in Phase 3
-uv run python -m app.scripts.seed --reset
+uv run python -m app.scripts.seed    # idempotent; --reset wipes and rebuilds
 uv run pytest --cov                  # 257 passed, 85%
+uv run uvicorn app.main:app --port 8000
+
+cd ../frontend
+npm run dev                          # then http://localhost:5173
+npm run e2e                          # 30 passed, needs the backend above
 ```
 
-Then open <http://localhost:8000/docs>, log in as `worker1@kavim.example.com`
-(`KavimDemo2026!`) and call `GET /admin/users` — 403. Log in as `admin@kavim.example.com` and
-call it again — 200.
+In the browser, sign in as `admin@kavim.example.com` (`KavimDemo2026!`) and open **ניהול** in the
+header: the user list, the matrix, invitations, and the audit log. Sign in as
+`worker1@kavim.example.com` and there is no admin link at all; going to `/admin/users` directly
+says why, and the API refuses the same request independently.
 
 ---
 
@@ -1140,3 +1133,162 @@ Modal, Select, Toggle, Badge.
 The RoleMatrix grid is the highest RTL risk in the project so far: the first wide
 two-dimensional layout, 5 roles × 30 permissions, where a single physical CSS property escaping
 the ESLint rule pushes the whole table sideways. The e2e harness is now in place to catch that.
+
+---
+
+## Session 10 — 2026-07-28 · Phase 3B: the admin UI
+
+Phase 3 is complete. An administrator now does from a browser what previously needed a shell:
+invite people, change roles, revoke sessions, edit the permission matrix, and read the audit log.
+
+**269 backend tests** (was 257) · **46 frontend tests** (was 33) · **30 e2e tests** across two
+locales (was 14) · all gates green.
+
+### Delivered
+
+| Area | Files |
+|---|---|
+| Regenerated contract | `api/generated/types.ts` — 1863 lines. Phase 3A's schemas were absent, so `AdminUserRow`, `RoleRow`, `PermissionRow`, `InvitationRow`, `AuditRow`, and `EffectivePermissionsTrace` had no frontend type at all |
+| Admin client | `api/admin.ts` — twelve endpoints, keyset cursors, no page numbers |
+| UI primitives | `components/ui/` — `Table`, `Modal`, `Select`, `Toggle`, `Badge`, plus `components/common/Ltr` |
+| Permission reads | `hooks/usePermission.ts` (`usePermission`, `useAnyPermission`) and `features/auth/RequirePermission.tsx` (`RequirePermission` for routes, `PermissionGate` for subtrees) |
+| Screens | `features/admin/` — `AdminLayout`, `AdminIndex`, `UserTable`, `UserEditModal`, `EffectivePermissionsModal`, `RoleMatrix`, `InvitationPanel`, `AuditLogView` |
+| Shell | `components/layout/UserMenu.tsx` (the first sign-out in the UI), `ShellLayout.tsx`, nav links, breakpoint chip now `import.meta.env.DEV` only |
+| Strings | `locales/{he,en}/admin.json` — full namespace; `forbidden.*` and `user.*` added to `common` |
+| Support | `hooks/useApiError.ts`, `hooks/useDebounced.ts`, `lib/datetime.ts` (Jerusalem rendering, CLAUDE.md rule 8) |
+| Tests | `usePermission.test.tsx`, `RoleMatrix.test.tsx`, `UserTable.test.tsx`, `e2e/admin.spec.ts`, `e2e/support/session.ts` |
+| Email language | `InvitationCreate.locale` (optional) + a selector on the invite form, added after a live send arrived in the wrong language |
+
+### The invitation language was the sender's browser, and nobody could change it
+
+Found by sending a real invitation: it arrived in Hebrew, and nothing in the UI could have made
+it English. `_accept_language()` read the admin's `Accept-Language` header — and
+`adminApi.createInvitation` never set one, so the value came from the browser's own language
+setting. The app's language toggle changes i18next and nothing else, so the one control that
+looked like it should govern this had no effect on it at all.
+
+The header was the wrong input in the first place. It describes the *sender*; the language that
+matters belongs to the invitee, and on a plant where a Hebrew-speaking manager invites an
+English-speaking contractor the default is wrong every time — invisibly, because the sender never
+sees the mail.
+
+`InvitationCreate` now takes an optional `locale`, the form has a selector defaulting to the
+administrator's UI language, and the header stays as the fallback for the CLI and any client that
+does not send one. Two integration tests pin both halves: an explicit locale beats a contradicting
+header, and an absent one still follows it.
+
+### The decisions worth knowing
+
+**Matrix edits are staged, not live.** Every toggle is a whole-set PUT and the server flushes the
+entire permission cache after each one, so saving per click would fire thirty flushes while an
+administrator makes up their mind. The draft also makes the confirmation honest: it names the
+roles that change and how many people hold them *before* anything happens, which is what
+`RoleRow.user_count` exists for.
+
+**The saves run sequentially, not `Promise.all`.** Five concurrent PUTs turn one cache-flush storm
+into five, and make a partial failure impossible to report: the self-lockout guard can refuse the
+third role after the first two committed. The screen refetches on settle — including on failure —
+so it shows what is true rather than what was asked for.
+
+**Four screens, four permissions, so the tab strip is built from what the user holds.** An auditor
+has `audit:read` and nothing else. Rendering four tabs and letting three answer 403 reads as a
+broken screen; rendering one reads as a boundary.
+
+**A denied route explains itself instead of redirecting.** Bouncing to `/` is indistinguishable
+from a broken link, and the next step after that is a support call. None of this is security — the
+worker e2e test asserts both halves: the screen refuses, and the same request made anyway is still
+refused by the server.
+
+**`useAnyPermission` returns a boolean, never a filtered array.** A selector that built an array
+would produce a new reference on every store write and re-render the whole shell.
+
+**Native `<select>`, hand-rolled `<dialog>`.** The picker is native because Android renders it full
+screen with 48px rows, which is what a gloved hand needs, and a custom listbox would need its own
+RTL and focus handling to be worse. The modal is *not* native because jsdom does not implement
+`showModal`, which would push every dialog assertion out of the component suite and into e2e.
+
+### Bugs found by running it
+
+**1. `/admin` rendered a blank page.** The redirect to the first tab lived in an
+`if (pathname === '/admin')` branch inside `AdminLayout` — and a pathless layout route only matches
+when one of its children does. With no index route, `/admin` matched the guard above it and
+rendered its empty outlet, so `AdminLayout` never ran and the branch never executed. Fixed with a
+real index route (`AdminIndex`). Found by the first e2e test, not by clicking around, because the
+nav link goes to `/admin`.
+
+**2. `vitest run` was reporting green with a file that never ran.** Vitest had no `include`, so its
+default glob also collected `e2e/auth.spec.ts`; a Playwright spec loaded outside the Playwright
+runner throws `Playwright Test did not expect test.describe() to be called here`. That is a failed
+*suite*, and the summary line still reads `Tests 33 passed` — which is exactly what session 9
+recorded. Scoped to `src/**` in `vite.config.ts`. A test count that cannot go down when a file
+breaks is not a test count.
+
+**3. `npm run lint` could not be run after `npm run e2e`.** ESLint had no ignore for
+`playwright-report/`, so it tried to type-lint Playwright's own bundled report JavaScript and
+aborted the entire run: *"You have used a rule which requires type information"*. Not a warning —
+zero files linted. CI never hit it because it only uploads the report on failure and lints in a
+different job.
+
+### Probes — an assertion nobody has seen fail is not known to work
+
+The two RTL assertions in `admin.spec.ts` are the reason the file exists, so both were made to
+fail on purpose and then reverted:
+
+```
+sticky start-0 → sticky left-0   (matrix column)   -> he-mobile FAILED  right: expected "0px", got "auto"
+overflow-x-auto removed          (Table wrapper)   -> he-mobile FAILED  page overflow 469px
+```
+
+The second is the classic RTL regression in its natural habitat: the grid is wider than a phone by
+design, so if it does not scroll inside its own container, the document scrolls instead and the
+whole layout shifts.
+
+### Verification evidence
+
+```
+ruff / format     All checks passed!
+mypy --strict     Success: no issues found in 67 source files
+import-linter     Contracts: 5 kept, 0 broken
+pytest            269 passed  (was 257)
+tsc -b            no errors
+eslint .          clean  (incl. the physical-CSS ban)
+prettier --check  clean  (the glob now covers e2e/ too)
+vitest run        46 passed   (was 33)
+playwright        30 passed   (15 specs × he-mobile + en-desktop; was 14)
+vite build        built in 2.05s
+```
+
+Bundle, gzipped: `index` 78.0 kB + `react` 32.1 kB + `i18n` 17.6 kB + `query` 15.9 kB + CSS
+6.3 kB ≈ **150 kB** against the 250 kB budget in NFR-02. The admin area is lazy and costs a
+signed-in worker nothing: `UserTable` 2.70 kB, `RoleMatrix` 2.18 kB, `InvitationPanel` 1.84 kB,
+`AuditLogView` 1.54 kB, and the `date-fns-tz` chunk (8.70 kB) loads with them rather than at boot.
+
+The permission boundary, live in a browser, in both locales:
+
+```
+admin@kavim.example.com   /admin -> /admin/users, 7 users listed, matrix saves and reverts
+worker1@kavim.example.com no admin nav link · /admin/users -> "no access" · GET /admin/users -> 403
+```
+
+### Known gaps
+
+| Gap | Consequence |
+|---|---|
+| No project picker on the permission trace | Layers 2 and 3 report "no project selected". `modules/projects` is Phase 4; the modal takes `project_id` already |
+| Invitations cannot name projects | `POST /admin/invitations` accepts `project_ids`; the form sends `[]` because there is no project list to choose from yet |
+| No `axe-core` pass | NFR-05 wants automated a11y assertions. Unchanged from session 9, and the admin screens are now the largest untested surface for it |
+| No bulk invite | One address per submission. Whether that matters depends on E8 — see the blocked table |
+| Matrix has no per-role save | Save applies every staged role at once. A refusal mid-loop leaves earlier roles saved, which the refetch shows honestly but does not undo |
+| A **resent** invitation falls back to the header | `invitations` has no `locale` column, so the language chosen when the invitation was created cannot be recovered on resend. Persisting it is a migration; worth doing when the next one is needed anyway |
+| The `invite` CLI is still Hebrew-only | Hardcoded `settings.DEFAULT_LOCALE`. Adding `--locale` is a two-line change, deferred because the UI now covers the real use |
+| `admin` i18n bundle loads at boot | All four namespaces are static imports in `i18n.ts`. Lazy namespace loading is the Phase 8 bundle work |
+
+### Next step
+
+**Phase 4 — projects, groups, and the column engine.** `modules/projects` with the board column
+types, group ordering, and saved views; `project_param` wired into `require_permission` so layer 2
+finally has a call site; and the project picker that completes the FR-210 trace.
+
+**Worth doing first:** answer **E5** in the blocked table. Phase 4 designs the default column set,
+and a photo of one real quality checklist is what separates a generic template from one a line can
+use on day one.

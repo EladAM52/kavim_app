@@ -127,6 +127,10 @@ class InvitationCreate(SchemaBase):
     email: EmailStr
     role_key: RoleKey
     project_ids: list[str] = Field(default_factory=list, max_length=50)
+    # The language the *invitee* reads, which is not something the sender's
+    # browser knows. Omitted falls back to the request's `Accept-Language`,
+    # which is the only signal available to the CLI and to older clients.
+    locale: Locale | None = None
 
 
 class InvitationRow(SchemaBase):

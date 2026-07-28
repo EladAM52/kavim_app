@@ -81,11 +81,16 @@ ReadsAudit = Annotated[Principal, Depends(require_permission("audit:read"))]
 
 
 def _accept_language(request: Request) -> Locale:
-    """Locale for the invitation email.
+    """Fallback locale for an invitation email.
 
-    The invitee has no account yet, so there is no stored preference to honour —
-    the inviting administrator's browser header is the only signal available, and
-    it is usually right, because the two work at the same plant.
+    The invitee has no account yet, so there is no stored preference to honour.
+    When the caller does not state a language — the CLI, or any client written
+    before `InvitationCreate.locale` existed — the inviting administrator's
+    browser header is the only signal available, and it is usually right,
+    because the two work at the same plant.
+
+    It is only a fallback. The header describes the *sender*, and which language
+    the invitee reads is something the sender knows and the browser does not.
     """
     header = (request.headers.get("Accept-Language") or "").lower()
     return Locale.EN if header.startswith("en") else Locale(settings.DEFAULT_LOCALE)
@@ -337,7 +342,7 @@ async def create_invitation(
         role_id=role.id,
         invited_by=principal.id,
         project_ids=project_ids,
-        locale=_accept_language(request),
+        locale=payload.locale or _accept_language(request),
         ip=client_ip(request),
         user_agent=user_agent(request),
     )

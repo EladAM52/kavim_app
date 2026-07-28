@@ -1,7 +1,12 @@
 import { useTranslation } from 'react-i18next';
+import { NavLink } from 'react-router-dom';
 
 import { LanguageToggle } from '@/components/common/LanguageToggle';
+import { UserMenu } from '@/components/layout/UserMenu';
+import { ADMIN_PERMISSIONS } from '@/features/admin/constants';
+import { useAnyPermission } from '@/hooks/usePermission';
 import { useBreakpoint } from '@/hooks/useBreakpoint';
+import { cn } from '@/lib/cn';
 
 interface AppShellProps {
   children: React.ReactNode;
@@ -10,13 +15,14 @@ interface AppShellProps {
 /**
  * Application frame.
  *
- * Phase 0 is the header and main region only. The sidebar (desktop) and bottom
- * tab bar (mobile) arrive with routing in Phase 3 — the breakpoint hook is
- * already wired so those are additive rather than a restructure.
+ * Phase 3 adds the primary nav and the user menu. The mobile bottom tab bar
+ * arrives with the board in Phase 5 — there are two destinations right now, and
+ * a tab bar for two links takes 60px of vertical space off a phone for nothing.
  */
 export function AppShell({ children }: AppShellProps): React.JSX.Element {
   const { t } = useTranslation();
   const { breakpoint } = useBreakpoint();
+  const canAdminister = useAnyPermission(ADMIN_PERMISSIONS);
 
   return (
     <div className="flex min-h-dvh flex-col">
@@ -37,17 +43,37 @@ export function AppShell({ children }: AppShellProps): React.JSX.Element {
             </span>
           </div>
 
+          <nav
+            aria-label={t('nav.skipToContent')}
+            className="ms-4 hidden items-center gap-1 sm:flex"
+          >
+            <HeaderLink to="/">{t('nav.myTasks')}</HeaderLink>
+            {canAdminister && <HeaderLink to="/admin">{t('nav.admin')}</HeaderLink>}
+          </nav>
+
           {/* ms-auto is the logical equivalent of margin-left in LTR and
-              margin-right in RTL, so the toggle stays on the trailing edge. */}
+              margin-right in RTL, so the controls stay on the trailing edge. */}
           <div className="ms-auto flex items-center gap-2">
-            <span
-              className="hidden rounded bg-white/15 px-2 py-1 font-mono text-xs sm:inline"
-              title="active breakpoint"
-            >
-              {breakpoint}
-            </span>
+            {/* A development affordance, not a product feature: it ships only in
+                dev builds, where knowing the active breakpoint is worth a chip. */}
+            {import.meta.env.DEV && (
+              <span
+                className="hidden rounded bg-white/15 px-2 py-1 font-mono text-xs sm:inline"
+                title="active breakpoint"
+              >
+                {breakpoint}
+              </span>
+            )}
             <LanguageToggle />
+            <UserMenu />
           </div>
+        </div>
+
+        {/* Below `sm` the nav moves under the brand rather than disappearing —
+            the admin area has to be reachable from a phone. */}
+        <div className="mx-auto flex max-w-6xl gap-1 px-4 pb-2 sm:hidden">
+          <HeaderLink to="/">{t('nav.myTasks')}</HeaderLink>
+          {canAdminister && <HeaderLink to="/admin">{t('nav.admin')}</HeaderLink>}
         </div>
       </header>
 
@@ -59,5 +85,29 @@ export function AppShell({ children }: AppShellProps): React.JSX.Element {
         {t('app.name')} · {t('system.subtitle')}
       </footer>
     </div>
+  );
+}
+
+function HeaderLink({
+  to,
+  children,
+}: {
+  to: string;
+  children: React.ReactNode;
+}): React.JSX.Element {
+  return (
+    <NavLink
+      to={to}
+      // Without `end`, "/" matches every path and both links render active.
+      end={to === '/'}
+      className={({ isActive }) =>
+        cn(
+          'rounded-md px-3 py-1.5 text-sm font-medium transition-colors',
+          isActive ? 'bg-white/20 text-white' : 'text-brand-50 hover:bg-white/10',
+        )
+      }
+    >
+      {children}
+    </NavLink>
   );
 }

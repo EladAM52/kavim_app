@@ -48,6 +48,12 @@ export default defineConfig({
   },
 
   test: {
+    // Scoped to src/. Without this, vitest's default glob also collects
+    // `e2e/*.spec.ts`, and a Playwright spec loaded outside the Playwright
+    // runner throws "test.describe() was not expected to be called here" — a
+    // failed *suite* that still reports every collected test as passing, so
+    // `vitest run` reads green at a glance while one file never ran.
+    include: ['src/**/*.{test,spec}.{ts,tsx}'],
     environment: 'jsdom',
     globals: true,
     setupFiles: ['./src/test/setup.ts'],

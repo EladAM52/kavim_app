@@ -1,0 +1,151 @@
+{
+  "title": "Administration",
+  "tabs": {
+    "users": "Users",
+    "roles": "Roles and permissions",
+    "invitations": "Invitations",
+    "audit": "Audit log"
+  },
+  "common": {
+    "loadMore": "Load more",
+    "loading": "Loading…",
+    "refresh": "Refresh",
+    "of": "of",
+    "never": "Never",
+    "you": "(you)"
+  },
+  "roleKeys": {
+    "SYSTEM_ADMIN": "System admin",
+    "LINE_MANAGER": "Line manager",
+    "SHIFT_SUPERVISOR": "Shift supervisor",
+    "WORKER": "Worker",
+    "VIEWER": "Viewer / auditor"
+  },
+  "userStatus": {
+    "invited": "Invited",
+    "active": "Active",
+    "deactivated": "Deactivated",
+    "locked": "Temporarily locked"
+  },
+  "users": {
+    "title": "Users",
+    "search": "Search by name or email",
+    "filterRole": "Filter by role",
+    "filterStatus": "Filter by status",
+    "allRoles": "All roles",
+    "allStatuses": "All statuses",
+    "columns": {
+      "name": "Name",
+      "email": "Email",
+      "role": "Role",
+      "status": "Status",
+      "lastLogin": "Last login",
+      "actions": "Actions"
+    },
+    "empty": "No users matched",
+    "edit": "Edit",
+    "editTitle": "Edit {{name}}",
+    "editRole": "Role",
+    "editStatus": "Status",
+    "editHint": "You cannot change your own role or deactivate your own account.",
+    "saved": "User updated. It takes effect on their next request.",
+    "forceLogout": "Sign out everywhere",
+    "forceLogoutTitle": "Sign {{name}} out of every device?",
+    "forceLogoutBody": "Every active session is revoked and they will have to sign in again. The account itself stays active.",
+    "forceLogoutDone": "All sessions revoked.",
+    "permissions": "Effective permissions",
+    "permissionsTitle": "Effective permissions — {{name}}",
+    "lockedUntil": "Locked until {{time}}"
+  },
+  "trace": {
+    "roles": "Roles",
+    "layer1": "Layer 1 — role permissions",
+    "layer2": "Layer 2 — project permission level",
+    "layer2None": "No project selected, so layer 2 does not apply.",
+    "layer3": "Layer 3 — column-level rules",
+    "effective": "Effective permissions",
+    "editable": "Editable",
+    "notEditable": "Blocked",
+    "computedAt": "Computed at {{time}}"
+  },
+  "matrix": {
+    "title": "Role and permission matrix",
+    "hint": "Ticking or unticking applies to everyone holding the role. It takes effect on their next request.",
+    "permission": "Permission",
+    "holders_one": "1 user",
+    "holders_other": "{{count}} users",
+    "save": "Save changes",
+    "unsaved_one": "1 unsaved change",
+    "unsaved_other": "{{count}} unsaved changes",
+    "discard": "Discard changes",
+    "confirmTitle": "Save these permission changes?",
+    "confirmBody": "This affects the following roles and everyone who holds them:",
+    "saved": "Permission matrix saved.",
+    "resources": {
+      "project": "Quality reviews",
+      "structure": "Board structure",
+      "task": "Tasks",
+      "comment": "Comments",
+      "file": "Files",
+      "user": "Users and administration",
+      "audit": "Audit",
+      "report": "Reports",
+      "notification": "Notifications"
+    }
+  },
+  "invitations": {
+    "title": "Invitations",
+    "invite": "Invite a user",
+    "email": "Email address",
+    "role": "Role",
+    "locale": "Email language",
+    "localeHint": "The invitation is sent in the language chosen here — pick the language the recipient reads, not your own interface language.",
+    "send": "Send invitation",
+    "sent": "Invitation sent to {{email}}.",
+    "filterStatus": "Filter by status",
+    "allStatuses": "All invitations",
+    "columns": {
+      "email": "Email",
+      "role": "Role",
+      "status": "Status",
+      "invitedBy": "Invited by",
+      "expires": "Expires",
+      "actions": "Actions"
+    },
+    "empty": "No invitations to show",
+    "resend": "Resend",
+    "resendDone": "A new invitation was sent. The previous link no longer works.",
+    "revoke": "Revoke",
+    "revokeTitle": "Revoke the invitation for {{email}}?",
+    "revokeBody": "The emailed link stops working immediately. The same address can be invited again later.",
+    "revoked": "Invitation revoked.",
+    "deliveryNote": "Invitations are emailed through the delivery queue, so they can take a minute to arrive."
+  },
+  "invitationStatus": {
+    "pending": "Pending",
+    "consumed": "Accepted",
+    "revoked": "Revoked",
+    "expired": "Expired"
+  },
+  "audit": {
+    "title": "Audit log",
+    "hint": "The audit log is read-only. Entries cannot be edited or deleted.",
+    "filterAction": "Filter by action",
+    "filterEntity": "Filter by entity type",
+    "since": "From",
+    "until": "To",
+    "clear": "Clear filters",
+    "columns": {
+      "time": "When",
+      "action": "Action",
+      "entity": "Entity",
+      "actor": "Actor",
+      "ip": "IP address"
+    },
+    "empty": "No entries matched",
+    "system": "System",
+    "details": "Details",
+    "before": "Before",
+    "after": "After"
+  }
+}
