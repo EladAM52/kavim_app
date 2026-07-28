@@ -1476,3 +1476,61 @@ middle of a long command, and the development one is the one in the README.
 | `/health/ready` is public | Reachable through the catch-all; names which dependency is down. Restricting it is a commented block in `kavim.conf` |
 | Swagger is reachable in production | Deliberate, behind `API_DOCS_ENABLED=true` plus HTTP Basic. It publishes the API map to anyone holding those credentials, and **"Try it out" runs against production data** |
 | No automated test loads the app under `/kavim` | The units pin the cookie path, the base joins, and the schema link; the deploy exercised the rest by hand. Every subpath defect so far was found by a browser, not a test |
+
+---
+
+## Session 12 — 2026-07-28 · The dev stack published an open Redis on the production host
+
+Not a feature. One defect, one repo-side fix, and the reason it is written down.
+
+**What happened.** The development stack was started once on the shared production server, and
+`restart: unless-stopped` brought `kavim-redis` back after a daemon restart. It sat on
+`0.0.0.0:6379`, unauthenticated, for hours — visible in a routine `docker ps` alongside the correct
+`kavim-prod-redis`, which publishes nothing. Removed with
+`docker compose -f infra/docker-compose.yml --env-file .env down`; the two compose files declare
+`name: kavim` and `name: kavim-prod`, so that command cannot reach the production project.
+
+**Why it is severity-high rather than a leak.** An open Redis is remote code execution, not exposed
+cache. `CONFIG SET dir` plus `CONFIG SET dbfilename` writes an attacker-chosen file as the container
+user; cron or `authorized_keys` does the rest. Nothing in this system used that container.
+
+**The fix is in the repo, because the server was only where it showed.** `infra/docker-compose.yml`
+published `"${REDIS_PORT:-6379}:6379"` — no interface, so Docker binds `0.0.0.0` *and* writes its own
+iptables chain, which is consulted before the host firewall's. A `ufw deny 6379` would not have
+closed it. All four published dev ports are now explicit:
+
+| Service | Binding | Why |
+|---|---|---|
+| `db` | `127.0.0.1` hard-coded | A developer's Postgres never needs to be off-box |
+| `redis` | `127.0.0.1` hard-coded | Above |
+| `backend` | `${BIND_HOST:-127.0.0.1}` | Testing a mobile-first UI from a real phone on the same Wi-Fi is a genuine need; it should be a deliberate act |
+| `frontend` | `${BIND_HOST:-127.0.0.1}` | Above |
+
+`BIND_HOST` is in `.env.example` and deliberately **not** in `core/config.py` — Compose interpolates
+it, the application never reads it. `Settings` uses `extra="ignore"`, so its presence in `.env` is
+inert. `infra/docker-compose.prod.yml` already bound both of its published ports to loopback and is
+unchanged.
+
+**The lesson, which is not about Redis.** A default that is safe on a laptop is not safe on a host
+that runs eighteen other containers, and Compose's default port syntax picks the unsafe one. The
+production file had been written carefully because it was obviously production; the development file
+had not, because it was obviously development — until it ran somewhere it wasn't.
+
+Live containers were verified before and after: production is `kavim-prod-{backend,worker,beat,db,
+redis,minio}`, backend rebuilt onto `75f4ad7`+`c6a27ea`, only `127.0.0.1:4000` and `127.0.0.1:5434`
+published. **No application code changed, so the 286-test suite is untouched.**
+
+### Still open
+
+Unchanged from session 11: secrets not rotated (by decision), no backups, no staging, R13
+deliverability. **E5 — a real quality checklist — is with the QA manager at the plant**, and is what
+Phase 4's default column set is waiting on.
+
+### Next step
+
+**Phase 4 — projects, groups, and the column engine**, split by what E5 blocks. Independent of it and
+larger: `modules/projects` with Project and Group CRUD and fractional-index ordering, `project_param`
+wired into `require_permission` so authorization layer 2 finally has a call site (`project_members`
+is currently a table nothing reads), the `ProjectMember` management API, and the shell's project
+picker — which also completes the FR-210 permission trace and lets an invitation name projects.
+Dependent on E5: the seeded templates, the default column set, and which column types ship first.

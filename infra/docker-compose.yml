@@ -46,8 +46,12 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-kavim}
       # Deterministic collation so ORDER BY matches across machines.
       POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
+    # Loopback only. A bare "5432:5432" binds 0.0.0.0, and Docker writes its own
+    # iptables chain that is consulted *before* the host firewall's — so ufw
+    # denying 5432 does not close it. This stack is for a developer's machine,
+    # which never needs more than localhost.
     ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
       - ./postgres/init:/docker-entrypoint-initdb.d:ro
@@ -68,8 +72,15 @@ services:
       --appendonly yes
       --maxmemory 512mb
       --maxmemory-policy allkeys-lru
+    # Loopback only, and this one is not a hardening nicety — it is the defect.
+    # This stack got started once on the shared production server to try
+    # something, `restart: unless-stopped` brought it back after a daemon
+    # restart, and an unauthenticated Redis sat on 0.0.0.0:6379 for hours. That
+    # is remote code execution, not a data leak: CONFIG SET dir + dbfilename
+    # writes an arbitrary file as the container user, and cron or
+    # authorized_keys does the rest.
     ports:
-      - "${REDIS_PORT:-6379}:6379"
+      - "127.0.0.1:${REDIS_PORT:-6379}:6379"
     volumes:
       - redisdata:/data
     healthcheck:
@@ -88,8 +99,11 @@ services:
       uvicorn app.main:app
       --host 0.0.0.0 --port 8000
       --reload --reload-dir /app/app
+    # `BIND_HOST=0.0.0.0` to reach the dev API from a phone on the same Wi-Fi,
+    # which a mobile-first UI genuinely needs. Loopback by default so it is a
+    # deliberate act rather than the thing that happens when nobody looks.
     ports:
-      - "8000:8000"
+      - "${BIND_HOST:-127.0.0.1}:8000:8000"
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health/live', timeout=3).status==200 else 1)"]
       interval: 10s
@@ -128,7 +142,7 @@ services:
       VITE_API_PROXY_TARGET: http://backend:8000
       VITE_WS_URL: ws://localhost:8000/ws
     ports:
-      - "5173:5173"
+      - "${BIND_HOST:-127.0.0.1}:5173:5173"
     volumes:
       - ../frontend:/app
       - frontend_node_modules:/app/node_modules
