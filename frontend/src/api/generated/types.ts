@@ -212,6 +212,13 @@ export interface paths {
      *
      *     Revoking every device is a destructive action, so it needs proof of an active
      *     session rather than mere possession of one cookie.
+     *
+     *     Declared with `require_authenticated()` rather than a bare `CurrentUser`: it
+     *     is a mutation, and `tests/security/test_all_routes_declare_permission.py`
+     *     requires every mutation to state its authorization explicitly. There is no
+     *     permission to require here — signing yourself out of your own sessions is
+     *     identity, not privilege — and saying so is what distinguishes "considered"
+     *     from "overlooked".
      */
     post: operations['logout_all_api_v1_auth_logout_all_post'];
     delete?: never;
@@ -257,6 +264,295 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/api/v1/users/me': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * The signed-in user's profile and effective permissions
+     * @description No permission required — reading your own record is identity, not privilege.
+     *
+     *     This is the endpoint the SPA calls to notice that an administrator changed
+     *     its permissions, so it resolves live rather than from cache.
+     */
+    get: operations['read_me_api_v1_users_me_get'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    /**
+     * Update your own profile
+     * @description Name, phone, locale, and timezone. Nothing that grants access.
+     *
+     *     No permission-cache invalidation: none of these fields participates in an
+     *     authorization decision. If that ever stops being true, the invalidation call
+     *     belongs here and this comment is the thing that should have been checked.
+     */
+    patch: operations['update_me_api_v1_users_me_patch'];
+    trace?: never;
+  };
+  '/api/v1/admin/permissions': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Every grantable permission, for the matrix UI */
+    get: operations['list_permissions_api_v1_admin_permissions_get'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/admin/roles': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Roles with their permissions and how many people hold them */
+    get: operations['list_roles_api_v1_admin_roles_get'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/admin/roles/{role_id}/permissions': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    /**
+     * Replace a role's permissions (atomic)
+     * @description FR-203. The whole set in one transaction, audited, cache flushed.
+     *
+     *     The cache is flushed **entirely**, not per holder of this role. Enumerating
+     *     holders would be cheaper and would also be wrong: if this transaction also
+     *     changed a role assignment, the membership list misses somebody whichever side
+     *     of the change it is read from. See `authz.invalidate_all`.
+     */
+    put: operations['replace_role_permissions_api_v1_admin_roles__role_id__permissions_put'];
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/admin/users': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * List, search, and filter users
+     * @description `user:manage`, not `user:read`.
+     *
+     *     `user:read` is held by WORKER and VIEWER because it backs the member picker.
+     *     This response carries status, last login, and lockout state, which is a
+     *     different thing entirely.
+     */
+    get: operations['list_users_api_v1_admin_users_get'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/admin/users/{user_id}': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    /**
+     * Change a user's role, or activate/deactivate them
+     * @description FR-202 and FR-206. Takes effect on the target's **next request**.
+     *
+     *     That immediacy is the requirement, and it is why the cache is invalidated
+     *     here rather than left to expire: a revoked permission that survives five
+     *     minutes is a revoked permission that did not work.
+     */
+    patch: operations['update_user_api_v1_admin_users__user_id__patch'];
+    trace?: never;
+  };
+  '/api/v1/admin/users/{user_id}/force-logout': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Revoke every session a user holds
+     * @description FR-207. The account stays usable; the sessions do not.
+     *
+     *     Distinct from deactivation on purpose — this is the answer to a lost phone,
+     *     not to a departure.
+     */
+    post: operations['force_logout_api_v1_admin_users__user_id__force_logout_post'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/admin/users/{user_id}/effective-permissions': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Why this user can do what they can do
+     * @description FR-210. Layers 1, 2, and 3, with the inputs that produced each.
+     *
+     *     Needs `user:manage_permissions` rather than `user:manage`: it dumps a user's
+     *     complete authorization state, which is more than user administration needs.
+     *
+     *     Without `project_id` only layer 1 is meaningful — layers 2 and 3 are defined
+     *     per project, so the response reports them empty rather than guessing.
+     */
+    get: operations['read_effective_permissions_api_v1_admin_users__user_id__effective_permissions_get'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/admin/invitations': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Pending, consumed, and revoked invitations */
+    get: operations['list_invitations_api_v1_admin_invitations_get'];
+    put?: never;
+    /**
+     * Invite someone by email
+     * @description FR-101. Replaces `python -m app.scripts.invite`.
+     *
+     *     The response deliberately omits the raw token. The token *is* the credential,
+     *     and it exists in exactly one place — the emailed link. Returning it here would
+     *     let anyone holding `user:invite` accept an invitation addressed to someone
+     *     else.
+     */
+    post: operations['create_invitation_api_v1_admin_invitations_post'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/admin/invitations/{invitation_id}/resend': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Issue a new link and invalidate the old one
+     * @description FR-111. The previous link stops working immediately.
+     *
+     *     `create_invitation` already supersedes the pending row for an address, so
+     *     resending is creating — which also means the old token is revoked rather than
+     *     left alive alongside the new one.
+     *
+     *     Rate limited per address. Nothing else stops an administrator from mail-
+     *     bombing an inbox, and Gmail's ~500 recipients/day is a hard ceiling that takes
+     *     OTP delivery down with it when breached (SPEC R2).
+     */
+    post: operations['resend_invitation_api_v1_admin_invitations__invitation_id__resend_post'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/admin/invitations/{invitation_id}': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post?: never;
+    /**
+     * Revoke a pending invitation
+     * @description FR-111. `200` with a message rather than `204`.
+     *
+     *     The caller gets told what happened, and the same call on an already-revoked
+     *     invitation succeeds — a double-click must not produce an error for an outcome
+     *     the user already has.
+     */
+    delete: operations['revoke_invitation_api_v1_admin_invitations__invitation_id__delete'];
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/admin/audit-log': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Filtered, newest-first view of every recorded mutation
+     * @description `audit:read`, which VIEWER holds and WORKER does not.
+     *
+     *     That asymmetry is deliberate (SPEC §8.4): the auditor is a compliance role,
+     *     not a senior one, so it can read the log while holding no write permission
+     *     anywhere.
+     */
+    get: operations['read_audit_log_api_v1_admin_audit_log_get'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/api/v1/': {
     parameters: {
       query?: never;
@@ -295,10 +591,136 @@ export interface components {
       /** Detail */
       detail?: string | null;
     };
+    /** AdminUserRow */
+    AdminUserRow: {
+      /** Id */
+      id: string;
+      /** Email */
+      email: string;
+      /** Full Name */
+      full_name: string;
+      status: components['schemas']['UserStatus'];
+      locale: components['schemas']['Locale'];
+      /** Roles */
+      roles: string[];
+      /** Last Login At */
+      last_login_at: string | null;
+      /**
+       * Created At
+       * Format: date-time
+       */
+      created_at: string;
+      /** Locked Until */
+      locked_until: string | null;
+    };
+    /**
+     * AdminUserUpdate
+     * @description Role and status. Nothing else — an admin does not edit someone's name here.
+     *
+     *     Both optional; sending neither is a 422 rather than a silent no-op, so a
+     *     client with a bug finds out.
+     */
+    AdminUserUpdate: {
+      role_key?: components['schemas']['RoleKey'] | null;
+      status?: components['schemas']['UserStatus'] | null;
+    };
+    /** AuditRow */
+    AuditRow: {
+      /** Id */
+      id: number;
+      /** Action */
+      action: string;
+      /** Entity Type */
+      entity_type: string;
+      /** Entity Id */
+      entity_id: string | null;
+      /** Actor Id */
+      actor_id: string | null;
+      /** Actor Name */
+      actor_name: string | null;
+      /** Project Id */
+      project_id: string | null;
+      /** Before */
+      before: {
+        [key: string]: unknown;
+      } | null;
+      /** After */
+      after: {
+        [key: string]: unknown;
+      } | null;
+      /** Ip */
+      ip: string | null;
+      /** Request Id */
+      request_id: string | null;
+      /**
+       * Created At
+       * Format: date-time
+       */
+      created_at: string;
+    };
+    /**
+     * ColumnVerdict
+     * @description Layer 3 for one column: may this user write it, and why (FR-205).
+     */
+    ColumnVerdict: {
+      /** Key */
+      key: string;
+      /** Label He */
+      label_he: string;
+      /** Label En */
+      label_en: string;
+      /** Editable By Roles */
+      editable_by_roles: string[];
+      /** Editable */
+      editable: boolean;
+    };
+    /**
+     * EffectivePermissionsTrace
+     * @description FR-210 — "why can this person edit this?", answered layer by layer.
+     *
+     *     Deliberately shows the *inputs* as well as the result. An administrator
+     *     looking at this screen already knows the effective set is wrong; what they
+     *     need is which of the three layers produced it.
+     */
+    EffectivePermissionsTrace: {
+      /** User Id */
+      user_id: string;
+      /** Email */
+      email: string;
+      /** Roles */
+      roles: string[];
+      /** Layer1 Role Permissions */
+      layer1_role_permissions: string[];
+      /** Layer2 Project Level */
+      layer2_project_level: string | null;
+      /** Layer2 Level Permissions */
+      layer2_level_permissions: string[];
+      /** Effective */
+      effective: string[];
+      /** Layer3 Columns */
+      layer3_columns: components['schemas']['ColumnVerdict'][];
+      /**
+       * Computed At
+       * Format: date-time
+       */
+      computed_at: string;
+    };
     /** HTTPValidationError */
     HTTPValidationError: {
       /** Detail */
       detail?: components['schemas']['ValidationError'][];
+    };
+    /** InvitationCreate */
+    InvitationCreate: {
+      /**
+       * Email
+       * Format: email
+       */
+      email: string;
+      role_key: components['schemas']['RoleKey'];
+      /** Project Ids */
+      project_ids?: string[];
+      locale?: components['schemas']['Locale'] | null;
     };
     /**
      * InvitationPreview
@@ -325,6 +747,46 @@ export interface components {
       invited_by_name: string;
     };
     /**
+     * InvitationRow
+     * @description Never carries the raw token.
+     *
+     *     The token is the credential. It exists in exactly one place — the emailed
+     *     link — and putting it in a list response would let anyone with `user:invite`
+     *     accept an invitation addressed to someone else.
+     */
+    InvitationRow: {
+      /** Id */
+      id: string;
+      /** Email */
+      email: string;
+      /** Role Key */
+      role_key: string;
+      status: components['schemas']['InvitationStatus'];
+      /** Project Ids */
+      project_ids: string[];
+      /** Invited By Name */
+      invited_by_name: string | null;
+      /**
+       * Created At
+       * Format: date-time
+       */
+      created_at: string;
+      /**
+       * Expires At
+       * Format: date-time
+       */
+      expires_at: string;
+      /** Consumed At */
+      consumed_at: string | null;
+      /** Revoked At */
+      revoked_at: string | null;
+    };
+    /**
+     * InvitationStatus
+     * @enum {string}
+     */
+    InvitationStatus: 'pending' | 'consumed' | 'revoked' | 'expired';
+    /**
      * Locale
      * @enum {string}
      */
@@ -338,6 +800,62 @@ export interface components {
       email: string;
       /** Password */
       password: string;
+    };
+    /**
+     * MeResponse
+     * @description The signed-in user's own record.
+     *
+     *     A superset of `UserIdentity`, which stays as it is because it is embedded in
+     *     `TokenResponse` and a login response has no business carrying a timezone.
+     */
+    MeResponse: {
+      /** Id */
+      id: string;
+      /** Email */
+      email: string;
+      /** Full Name */
+      full_name: string;
+      /** Phone */
+      phone: string | null;
+      /** Avatar Url */
+      avatar_url: string | null;
+      locale: components['schemas']['Locale'];
+      /** Timezone */
+      timezone: string;
+      status: components['schemas']['UserStatus'];
+      /** Roles */
+      roles: string[];
+      /** Permissions */
+      permissions: string[];
+      /** Last Login At */
+      last_login_at: string | null;
+    };
+    /**
+     * MeUpdate
+     * @description Everything a user may change about themselves — and nothing else.
+     *
+     *     No `email`, `status`, or `role`. `extra="forbid"` turns an attempt at any of
+     *     them into a 422 rather than a silently ignored field, so a client that thinks
+     *     it changed its own role finds out immediately.
+     *
+     *     Every field is optional and `None` means "leave alone", except `phone`, where
+     *     the user genuinely may want to clear it. That ambiguity is resolved by
+     *     `phone_cleared`: sending it removes the number, which is different from
+     *     omitting `phone` entirely.
+     */
+    MeUpdate: {
+      /** Full Name */
+      full_name?: string | null;
+      /** Phone */
+      phone?: string | null;
+      /**
+       * Phone Cleared
+       * @default false
+       */
+      phone_cleared: boolean;
+      locale?: components['schemas']['Locale'] | null;
+      /** Timezone */
+      timezone?: string | null;
     };
     /** MessageResponse */
     MessageResponse: {
@@ -363,6 +881,27 @@ export interface components {
       /** Code */
       code: string;
     };
+    /** Page[AdminUserRow] */
+    Page_AdminUserRow_: {
+      /** Items */
+      items: components['schemas']['AdminUserRow'][];
+      /** Next Cursor */
+      next_cursor?: string | null;
+    };
+    /** Page[AuditRow] */
+    Page_AuditRow_: {
+      /** Items */
+      items: components['schemas']['AuditRow'][];
+      /** Next Cursor */
+      next_cursor?: string | null;
+    };
+    /** Page[InvitationRow] */
+    Page_InvitationRow_: {
+      /** Items */
+      items: components['schemas']['InvitationRow'][];
+      /** Next Cursor */
+      next_cursor?: string | null;
+    };
     /** PasswordResetConfirmPayload */
     PasswordResetConfirmPayload: {
       /** Token */
@@ -377,6 +916,23 @@ export interface components {
        * Format: email
        */
       email: string;
+    };
+    /**
+     * PermissionRow
+     * @description One grantable permission.
+     *
+     *     `resource` is the RoleMatrix's grouping key, not the key's prefix — three
+     *     permissions carry `structure` so they render under one heading.
+     */
+    PermissionRow: {
+      /** Key */
+      key: string;
+      /** Resource */
+      resource: string;
+      /** Description He */
+      description_he: string;
+      /** Description En */
+      description_en: string;
     };
     /**
      * RegisterRequest
@@ -408,6 +964,51 @@ export interface components {
       email: string;
       /** Expires In Seconds */
       expires_in_seconds: number;
+    };
+    /**
+     * RoleKey
+     * @description Seeded global roles (SPEC §8.4). The role → permission matrix is
+     *     editable at runtime; these keys are not.
+     * @enum {string}
+     */
+    RoleKey: 'SYSTEM_ADMIN' | 'LINE_MANAGER' | 'SHIFT_SUPERVISOR' | 'WORKER' | 'VIEWER';
+    /**
+     * RolePermissionsUpdate
+     * @description The complete new permission set for a role — not a delta.
+     *
+     *     A whole-set PUT rather than add/remove endpoints because FR-203 requires the
+     *     save to be atomic: the screen is a grid of checkboxes and the administrator
+     *     means "this is the state I want", not "apply these three edits in order".
+     */
+    RolePermissionsUpdate: {
+      /** Permission Keys */
+      permission_keys: string[];
+    };
+    /**
+     * RoleRow
+     * @description A role and everything it currently grants.
+     *
+     *     `user_count` exists so the matrix screen can say *"this affects 12 people"*
+     *     before an administrator unticks a box. Revoking a permission from LINE_MANAGER
+     *     is not a change to a row in a table; it is a change to everyone holding it,
+     *     and the UI should say so.
+     */
+    RoleRow: {
+      /** Id */
+      id: string;
+      key: components['schemas']['RoleKey'];
+      /** Label He */
+      label_he: string;
+      /** Label En */
+      label_en: string;
+      /** Rank */
+      rank: number;
+      /** Is System */
+      is_system: boolean;
+      /** Permission Keys */
+      permission_keys: string[];
+      /** User Count */
+      user_count: number;
     };
     /**
      * TokenResponse
@@ -449,6 +1050,11 @@ export interface components {
       /** Permissions */
       permissions: string[];
     };
+    /**
+     * UserStatus
+     * @enum {string}
+     */
+    UserStatus: 'invited' | 'active' | 'deactivated';
     /** ValidationError */
     ValidationError: {
       /** Location */
@@ -791,6 +1397,435 @@ export interface operations {
         };
         content: {
           'application/json': components['schemas']['MessageResponse'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+    };
+  };
+  read_me_api_v1_users_me_get: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['MeResponse'];
+        };
+      };
+    };
+  };
+  update_me_api_v1_users_me_patch: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['MeUpdate'];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['MeResponse'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+    };
+  };
+  list_permissions_api_v1_admin_permissions_get: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['PermissionRow'][];
+        };
+      };
+    };
+  };
+  list_roles_api_v1_admin_roles_get: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['RoleRow'][];
+        };
+      };
+    };
+  };
+  replace_role_permissions_api_v1_admin_roles__role_id__permissions_put: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        role_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['RolePermissionsUpdate'];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['RoleRow'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+    };
+  };
+  list_users_api_v1_admin_users_get: {
+    parameters: {
+      query?: {
+        limit?: number;
+        cursor?: string | null;
+        /** @description Name or email */
+        q?: string | null;
+        role?: components['schemas']['RoleKey'] | null;
+        status?: components['schemas']['UserStatus'] | null;
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['Page_AdminUserRow_'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+    };
+  };
+  update_user_api_v1_admin_users__user_id__patch: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        user_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['AdminUserUpdate'];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['AdminUserRow'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+    };
+  };
+  force_logout_api_v1_admin_users__user_id__force_logout_post: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        user_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['MessageResponse'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+    };
+  };
+  read_effective_permissions_api_v1_admin_users__user_id__effective_permissions_get: {
+    parameters: {
+      query?: {
+        project_id?: string | null;
+      };
+      header?: never;
+      path: {
+        user_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['EffectivePermissionsTrace'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+    };
+  };
+  list_invitations_api_v1_admin_invitations_get: {
+    parameters: {
+      query?: {
+        limit?: number;
+        cursor?: string | null;
+        status?: components['schemas']['InvitationStatus'] | null;
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['Page_InvitationRow_'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+    };
+  };
+  create_invitation_api_v1_admin_invitations_post: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['InvitationCreate'];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['InvitationRow'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+    };
+  };
+  resend_invitation_api_v1_admin_invitations__invitation_id__resend_post: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        invitation_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      202: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['InvitationRow'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+    };
+  };
+  revoke_invitation_api_v1_admin_invitations__invitation_id__delete: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        invitation_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['MessageResponse'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPValidationError'];
+        };
+      };
+    };
+  };
+  read_audit_log_api_v1_admin_audit_log_get: {
+    parameters: {
+      query?: {
+        limit?: number;
+        cursor?: string | null;
+        actor_id?: string | null;
+        action?: string | null;
+        entity_type?: string | null;
+        entity_id?: string | null;
+        since?: string | null;
+        until?: string | null;
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['Page_AuditRow_'];
         };
       };
       /** @description Validation Error */

@@ -510,6 +510,42 @@ async def test_the_queued_invitation_renders_in_both_locales(
         assert rendered.text_body.strip()
 
 
+async def test_the_requested_locale_beats_the_senders_browser(
+    api: AsyncClient, db: AsyncSession, admin_headers: dict[str, str]
+) -> None:
+    """FR-101. The invitee's language is the sender's to state, not the browser's.
+
+    `Accept-Language` describes whoever is holding the mouse. On a plant where a
+    Hebrew-speaking manager invites an English-speaking contractor, honouring the
+    header sends the wrong language every time — and the mistake is invisible to
+    the sender, because they never see the mail.
+    """
+    await api.post(
+        f"{ADMIN}/invitations",
+        headers={**admin_headers, "Accept-Language": "he-IL,he;q=0.9"},
+        json={"email": unique_email("english-invitee"), "role_key": "WORKER", "locale": "en"},
+    )
+
+    row = await db.scalar(select(NotificationOutbox).order_by(NotificationOutbox.id.desc()))
+    assert row is not None
+    assert (row.payload or {})["locale"] == "en"
+
+
+async def test_an_unstated_locale_still_follows_the_header(
+    api: AsyncClient, db: AsyncSession, admin_headers: dict[str, str]
+) -> None:
+    """The fallback the CLI and every pre-`locale` client depend on."""
+    await api.post(
+        f"{ADMIN}/invitations",
+        headers={**admin_headers, "Accept-Language": "en-US,en;q=0.9"},
+        json={"email": unique_email("header-invitee"), "role_key": "WORKER"},
+    )
+
+    row = await db.scalar(select(NotificationOutbox).order_by(NotificationOutbox.id.desc()))
+    assert row is not None
+    assert (row.payload or {})["locale"] == "en"
+
+
 async def test_the_response_never_carries_the_raw_token(
     api: AsyncClient, admin_headers: dict[str, str]
 ) -> None:

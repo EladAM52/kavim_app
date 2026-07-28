@@ -22,6 +22,16 @@
     "search": "Search",
     "confirm": "Confirm"
   },
+  "user": {
+    "menu": "User menu",
+    "signedInAs": "Signed in as",
+    "signOut": "Sign out"
+  },
+  "forbidden": {
+    "title": "You do not have access to this screen",
+    "body": "The address is valid, but your role does not include the permission it needs. Ask a system administrator if that looks wrong.",
+    "back": "Back to the main screen"
+  },
   "language": {
     "label": "Language",
     "hebrew": "עברית",
