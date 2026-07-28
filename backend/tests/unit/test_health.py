@@ -107,3 +107,42 @@ def test_the_app_carries_the_public_prefix_as_its_root_path() -> None:
         app = create_app()
 
     assert app.root_path == "/kavim"
+
+
+async def test_production_docs_still_get_the_cdn_allowance(client: AsyncClient) -> None:
+    """The bug this exists to prevent, found on a live server.
+
+    The production branch used to be evaluated first, so `/docs` inherited
+    `script-src 'self'` and Swagger's bundle was refused: a password prompt that
+    worked, then a completely blank page. The docs allowance has to win over the
+    production policy for the three paths it covers.
+    """
+    from app.core import middleware as middleware_mod
+
+    # Both switches, because that is the only configuration in which the docs
+    # exist on a production host: FastAPI mounts them and the proxy asks for a
+    # password.
+    with (
+        mock.patch.object(middleware_mod.settings, "APP_ENV", "production"),
+        mock.patch.object(middleware_mod.settings, "API_DOCS_ENABLED", True),
+    ):
+        response = await client.get("/docs")
+
+    csp = response.headers["Content-Security-Policy"]
+    assert "https://cdn.jsdelivr.net" in csp
+    # And the production-only header is still applied on the same response.
+    assert "Strict-Transport-Security" in response.headers
+
+
+async def test_production_pages_other_than_docs_stay_strict(client: AsyncClient) -> None:
+    from app.core import middleware as middleware_mod
+
+    with (
+        mock.patch.object(middleware_mod.settings, "APP_ENV", "production"),
+        mock.patch.object(middleware_mod.settings, "API_DOCS_ENABLED", True),
+    ):
+        response = await client.get("/health/live")
+
+    csp = response.headers["Content-Security-Policy"]
+    assert "cdn.jsdelivr.net" not in csp
+    assert "script-src 'self';" in csp

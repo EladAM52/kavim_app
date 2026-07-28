@@ -26,7 +26,11 @@ _QUIET_PATHS = frozenset({"/health/live", "/health/ready", "/metrics", "/favicon
 # Swagger UI and ReDoc load their bundle from jsdelivr and their favicon from
 # fastapi.tiangolo.com, so the strict CSP blanks the page. These paths get the
 # CDN allowance and nothing else does — the SPA must never depend on it.
-# Production never reaches here: docs_url/redoc_url are None there (main.py).
+#
+# This applies in production too, when `API_DOCS_ENABLED` mounts the docs there.
+# It used to say production never reaches here, which stopped being true the day
+# the docs became optional rather than absent — and the symptom was a blank page
+# behind a working password prompt.
 _DOCS_PATHS = frozenset({"/docs", "/docs/oauth2-redirect", "/redoc"})
 _DOCS_CDN = "https://cdn.jsdelivr.net"
 _DOCS_FAVICON_HOST = "https://fastapi.tiangolo.com"
@@ -108,6 +112,27 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
             response.headers.setdefault(
                 "Strict-Transport-Security", "max-age=31536000; includeSubDomains"
             )
+
+        # The docs branch is checked **before** the production one, and the order
+        # is the whole point. Swagger loads its bundle from a CDN, so the strict
+        # policy below blanks the page — which is exactly what happened the first
+        # time the docs were enabled on a production host: the HTML arrived, the
+        # JavaScript was refused, and the browser showed nothing at all.
+        #
+        # This widens the policy for three paths that only exist when
+        # `API_DOCS_ENABLED` says so, and are additionally behind HTTP Basic auth
+        # at the proxy. The SPA's policy is untouched and must never depend on a
+        # third-party origin.
+        if settings.docs_enabled and request.url.path in _DOCS_PATHS:
+            csp = (
+                "default-src 'self'; "
+                f"img-src 'self' data: blob: {_DOCS_FAVICON_HOST}; "
+                f"style-src 'self' 'unsafe-inline' {_DOCS_CDN}; "
+                f"script-src 'self' 'unsafe-inline' 'unsafe-eval' {_DOCS_CDN}; "
+                "font-src 'self' data:; "
+                "connect-src 'self'"
+            )
+        elif settings.is_production:
             csp = (
                 "default-src 'self'; "
                 "img-src 'self' data: blob:; "
