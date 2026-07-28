@@ -1297,8 +1297,9 @@ use on day one.
 
 ## Session 11 — 2026-07-28 · Deployment: live at srv1515969.hstgr.cloud/kavim
 
-The first non-development deployment, behind the host's existing nginx, under a subpath.
-**279 backend tests** (was 269) · **50 frontend** (was 46) · 30 e2e.
+The first non-development deployment, behind the host's existing nginx, under a subpath. Six
+defects, three of them found only by real traffic on a real host.
+**286 backend tests** (was 269) · **50 frontend** (was 46) · 30 e2e.
 
 The localhost setup is untouched and still works exactly as before — verified by rebuilding at the
 root and re-running the full e2e suite.
@@ -1407,7 +1408,7 @@ it cannot reactivate a deactivated account into an administrator by accident. Pa
 read from stdin, never an argument. Audited, with the new account as its own actor. Four integration
 tests, including the self-disable, because an unexercised guard is an assumption.
 
-**279 backend tests** (was 275).
+**286 backend tests** by the end of the session (was 275).
 
 ### Still open after the deploy
 
@@ -1420,13 +1421,58 @@ tests, including the self-disable, because an unexercised guard is an assumption
   domains is still SPEC risk R13.
 - Nothing is backed up. `pgdata` now holds real accounts and a real audit log.
 
+### Operator access, and three more defects the server found
+
+Swagger and pgAdmin were both unreachable, deliberately. Both work now without publishing anything
+new: `API_DOCS_ENABLED` mounts the docs at all (off by default in production) and nginx demands HTTP
+Basic for those three paths — two switches, both of which must be on. Postgres publishes
+`127.0.0.1:5434`, for pgAdmin's own SSH-tunnel tab, so the database is never on a public port.
+
+**4. The production CSP blanked the Swagger page it had just started serving.** The password prompt
+worked and the page came up empty. The security-header middleware tested `is_production` *before*
+the docs branch, so `/docs` inherited the SPA's `script-src 'self'` and the browser refused
+Swagger's CDN bundle. The comment above `_DOCS_PATHS` asserted *"production never reaches here:
+docs_url/redoc_url are None there"* — true when written, false the moment the docs became optional
+rather than absent. **A comment stating an invariant is only as good as the change that breaks it.**
+
+**5. `root_path` took the whole app down.** Added for the Swagger schema URL, and precisely
+backwards: it tells Starlette the prefix *is present* in incoming paths, while nginx strips `/kavim`
+before proxying. Every asset 404'd — `/kavim/assets/…` returned 200 — and the SPA rendered blank.
+The real fix is far narrower: register the two docs pages by hand with
+`openapi_url = APP_PUBLIC_PATH + "/openapi.json"` and leave the schema route at the root, where
+nginx delivers it.
+
+*How that shipped.* The probe written to verify it called `importlib.reload()` on the module whose
+`settings` it had just patched, re-binding the name and undoing the patch — so both runs tested the
+default and reported a pass. **A probe that cannot fail is worse than no probe**, because it is
+believed. The server's own request log diagnosed it in one line. Two tests now drive `create_app`
+through httpx at both `APP_PUBLIC_PATH` values.
+
+`tests/security/test_all_routes_declare_permission.py` then refused the two hand-registered pages
+for declaring no authorization — its second real catch. They are in `PUBLIC_ROUTES` with the
+reasoning beside them.
+
+**6. `worker` and `beat` reported "unhealthy" while working correctly.** Both inherit the backend
+image's HTTP healthcheck and neither runs a web server. An indicator that is always red is one
+nobody reads. The worker now answers `celery inspect ping`; beat has none, because a scheduler has
+nothing honest to probe and Docker already knows whether the process is alive.
+
+**A stray development stack was running on the server** — from a `-f infra/docker-compose.yml`
+invocation — including Redis published on `0.0.0.0:6379` with no password, which is remote code
+execution rather than an information leak. Removed. The two compose files differ by one word in the
+middle of a long command, and the development one is the one in the README.
+
+**286 backend tests.**
+
 ### Known gaps
 
 | Gap | Consequence |
 |---|---|
+| **Production secrets were exposed in a chat transcript and not rotated** | `SECRET_KEY`, `POSTGRES_PASSWORD`, the Gmail App Password, and the MinIO root credentials were pasted in session 11 and left in place by decision. `SECRET_KEY` alone mints valid admin tokens. Rotation steps are in that session's exchange; treat all four as compromised until they change |
 | No automated backups | `pg_dump` is documented and manual. `pgdata` holds every quality record and a 24-month audit retention requirement |
 | No CI/CD to the server | Deploys are `git pull` and a rebuild, by hand, over SSH |
 | MinIO is single-node | Survives container rebuilds, not disk loss |
-| No staging environment | A bad release is discovered in production |
+| No staging environment | A bad release is discovered in production — and three of the six defects above were |
 | `/health/ready` is public | Reachable through the catch-all; names which dependency is down. Restricting it is a commented block in `kavim.conf` |
-| Nothing exercises the subpath end to end | The unit tests pin the cookie path and the base joins, and the build output was inspected — but no browser has loaded the app under `/kavim` yet. The first deploy is the test |
+| Swagger is reachable in production | Deliberate, behind `API_DOCS_ENABLED=true` plus HTTP Basic. It publishes the API map to anyone holding those credentials, and **"Try it out" runs against production data** |
+| No automated test loads the app under `/kavim` | The units pin the cookie path, the base joins, and the schema link; the deploy exercised the rest by hand. Every subpath defect so far was found by a browser, not a test |
