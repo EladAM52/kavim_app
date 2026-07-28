@@ -54,6 +54,16 @@ class Settings(BaseSettings):
     APP_DEBUG: bool = False
     APP_BASE_URL: str = "http://localhost:5173"
     API_PREFIX: str = "/api/v1"
+    # The path prefix the *browser* sees, when a reverse proxy serves the app
+    # under a subpath — `/kavim` for https://host/kavim. Empty at the root.
+    #
+    # The application itself still routes at the root: nginx strips the prefix
+    # before proxying (see `infra/nginx/kavim.conf`). This exists for the one
+    # thing stripping cannot fix — the refresh cookie's `path`, which the browser
+    # compares against the address bar, not against what the backend received.
+    # Get it wrong and login works, then the next page load silently signs the
+    # user out because the cookie was never sent.
+    APP_PUBLIC_PATH: str = ""
     LOG_LEVEL: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
     LOG_JSON: bool = True
 
@@ -155,6 +165,34 @@ class Settings(BaseSettings):
     @property
     def is_gmail_smtp(self) -> bool:
         return self.SMTP_HOST.endswith("gmail.com")
+
+    @property
+    def refresh_cookie_path(self) -> str:
+        """Where the browser will send the refresh cookie.
+
+        The public prefix plus the API prefix, because the browser matches a
+        cookie's path against the URL in the address bar — which still carries
+        `/kavim` even though nginx strips it before the request reaches here.
+        """
+        return f"{self.APP_PUBLIC_PATH}{self.API_PREFIX}/auth"
+
+    @model_validator(mode="after")
+    def _guard_public_path(self) -> Settings:
+        """A malformed prefix breaks sessions silently, so it fails at startup.
+
+        `kavim` without the leading slash, or `/kavim/` with a trailing one,
+        both produce a cookie path the browser will never match — and the only
+        symptom is users being signed out on reload, which looks like a token
+        bug and is not one.
+        """
+        value = self.APP_PUBLIC_PATH
+        if not value:
+            return self
+        if not value.startswith("/"):
+            raise ValueError(f"APP_PUBLIC_PATH must start with '/' (got {value!r})")
+        if value.endswith("/"):
+            raise ValueError(f"APP_PUBLIC_PATH must not end with '/' (got {value!r})")
+        return self
 
     @model_validator(mode="after")
     def _guard_email(self) -> Settings:

@@ -44,10 +44,25 @@ EXPOSE 8000
 ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
 
+# ── frontend build (for the production image only) ────────────────────────
+# The SPA is baked into the backend image so the deployment is single-origin:
+# one port, no CORS, no second web server (SPEC §5.5).
+#
+# `VITE_BASE_PATH` must be set at *build* time, not run time. Vite writes the
+# base into every asset URL in index.html when it builds, so a container that
+# was built for the root cannot be reconfigured to serve under /kavim by
+# setting an environment variable — it has to be rebuilt.
+FROM node:22-alpine AS frontend-build
+ARG VITE_BASE_PATH=/
+ENV CI=true
+WORKDIR /fe
+COPY frontend/package.json frontend/package-lock.json* ./
+RUN if [ -f package-lock.json ]; then npm ci; else npm install; fi
+COPY frontend/ ./
+RUN VITE_BASE_PATH="${VITE_BASE_PATH}" npm run build
+
 # ── production ────────────────────────────────────────────────────────────
 # Runtime dependencies only, non-root, no reload.
-# The built frontend is copied into app/static by the release pipeline
-# (see docs/SPEC.md §5.5) — FastAPI then serves the SPA from the same origin.
 FROM base AS prod
 COPY backend/pyproject.toml backend/README.md ./
 RUN mkdir -p app && touch app/__init__.py \
@@ -55,6 +70,9 @@ RUN mkdir -p app && touch app/__init__.py \
  && rm -rf /root/.cache
 
 COPY backend/ ./
+# FastAPI serves whatever is here; `_mount_spa` is a no-op when it is absent,
+# which is what keeps the development image unchanged.
+COPY --from=frontend-build /fe/dist ./app/static
 COPY infra/scripts/wait_for_db.sh /usr/local/bin/wait-for-db
 RUN chmod +x /usr/local/bin/wait-for-db \
  && groupadd --system --gid 1001 kavim \

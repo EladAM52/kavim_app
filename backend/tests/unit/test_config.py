@@ -140,3 +140,37 @@ def test_csv_env_vars_are_split(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_empty_csv_env_var_yields_empty_list(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("CORS_ORIGINS", "")
     assert Settings(_env_file=None).CORS_ORIGINS == []  # type: ignore[call-arg]
+
+
+# ══════════════════════════════════════════════════════════════════════════
+#  subpath deployment (APP_PUBLIC_PATH)
+# ══════════════════════════════════════════════════════════════════════════
+def test_the_refresh_cookie_path_is_the_api_prefix_at_a_host_root() -> None:
+    settings = Settings(_env_file=None)  # type: ignore[arg-type]
+    assert settings.refresh_cookie_path == "/api/v1/auth"
+
+
+def test_the_refresh_cookie_path_carries_the_public_prefix() -> None:
+    """The browser matches a cookie path against the address bar.
+
+    nginx strips `/kavim` before the request reaches the app, so the backend
+    never sees it — but the browser still does. Without the prefix here the
+    cookie is set and then never sent back, which looks like a token bug: login
+    succeeds, and the next page load signs the user out.
+    """
+    settings = Settings(APP_PUBLIC_PATH="/kavim", _env_file=None)  # type: ignore[arg-type]
+    assert settings.refresh_cookie_path == "/kavim/api/v1/auth"
+
+
+@pytest.mark.parametrize("value", ["kavim", "/kavim/", "kavim/"])
+def test_a_malformed_public_path_fails_at_startup(value: str) -> None:
+    """Each of these produces a cookie path no browser will ever match, and the
+    only symptom is users being signed out on reload — so it fails here instead.
+    """
+    with pytest.raises(ValueError, match="APP_PUBLIC_PATH"):
+        Settings(APP_PUBLIC_PATH=value, _env_file=None)  # type: ignore[arg-type]
+
+
+def test_an_empty_public_path_is_the_root_deployment() -> None:
+    settings = Settings(APP_PUBLIC_PATH="", _env_file=None)  # type: ignore[arg-type]
+    assert settings.refresh_cookie_path == "/api/v1/auth"

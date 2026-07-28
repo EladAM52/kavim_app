@@ -14,9 +14,17 @@
  */
 
 import type { components } from '@/api/generated/types';
+import { withBase } from '@/lib/basePath';
 import { getAccessToken, setAccessToken, useAuthStore } from '@/stores/auth';
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL ?? '/api/v1';
+/**
+ * Derived from the deploy's base path, not hardcoded.
+ *
+ * At the root that is `/api/v1`; under a reverse-proxy subpath it is
+ * `/kavim/api/v1`. `VITE_API_BASE_URL` still overrides it outright, for a
+ * deployment that puts the API on another origin entirely.
+ */
+const API_BASE = import.meta.env.VITE_API_BASE_URL ?? withBase('/api/v1');
 
 /** Field-level validation detail from a 422. */
 export interface ApiFieldError {
@@ -273,14 +281,15 @@ export interface ApiMeta {
  * Readiness, including the degraded case.
  *
  * Two reasons this bypasses `request()`:
- *   1. `/health/*` sits at the origin root, not under `/api/v1`.
+ *   1. `/health/*` sits beside `/api/v1`, not under it — so it takes the base
+ *      path but not the API prefix.
  *   2. A 503 body is the *useful* one — it names which dependency is down — so
  *      it must be returned, not thrown away as an error.
  */
 export async function fetchHealth(): Promise<HealthReady> {
   let response: Response;
   try {
-    response = await fetch('/health/ready', {
+    response = await fetch(withBase('/health/ready'), {
       headers: { Accept: 'application/json' },
     });
   } catch {

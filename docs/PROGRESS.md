@@ -10,7 +10,7 @@ Running record of what has been built, what was decided, what broke, and what mu
 | Structure | [`../PROJECT_STRUCTURE.md`](../PROJECT_STRUCTURE.md) |
 | Conventions | [`../CLAUDE.md`](../CLAUDE.md) |
 | Onboarding | [`ONBOARDING.md`](ONBOARDING.md) — concept primers, file map, testing map |
-| Last updated | 2026-07-28 (session 10) |
+| Last updated | 2026-07-28 (session 11) |
 
 ---
 
@@ -1292,3 +1292,102 @@ finally has a call site; and the project picker that completes the FR-210 trace.
 **Worth doing first:** answer **E5** in the blocked table. Phase 4 designs the default column set,
 and a photo of one real quality checklist is what separates a generic template from one a line can
 use on day one.
+
+---
+
+## Session 11 — 2026-07-28 · Deployment: the production stack and the subpath
+
+Prepared the first non-development deployment, to `https://srv1515969.hstgr.cloud/kavim` behind the
+host's existing nginx. **275 backend tests** (was 269) · **50 frontend** (was 46) · 30 e2e.
+
+Nothing has been deployed yet — this session built what a deploy needs and left the localhost setup
+untouched.
+
+### Delivered
+
+| File | Role |
+|---|---|
+| `infra/docker-compose.prod.yml` | db · redis · minio · minio-init · backend · worker · beat, plus a one-shot `migrate` behind a profile |
+| `infra/nginx/kavim.conf` | The `/kavim` location blocks, prefix stripping, WebSocket upgrade, asset caching |
+| `infra/env.production.example` | The template to copy to `.env` on the server. No secrets, `CHANGE_ME` on each one, with the generator command beside it |
+| `docs/DEPLOYMENT.md` | First deploy, updating, backups, and the gaps this deployment still has |
+| `backend/Dockerfile` | New `frontend-build` stage; the `prod` image now contains the SPA at `app/static` |
+| `core/config.py` | `APP_PUBLIC_PATH`, `refresh_cookie_path`, and a validator |
+| `lib/basePath.ts` | `basePath` / `routerBasename` / `withBase`, derived from Vite's `BASE_URL` |
+
+### The subpath is four problems, and only three of them are nginx's
+
+`/kavim` rather than a host root touches the asset URLs, the client routes, the API base, and the
+refresh cookie. nginx strips the prefix before proxying, which fixes the first three by letting the
+application keep routing at `/` — it never learns where it is mounted.
+
+**The cookie it cannot fix.** A browser matches a cookie's `path` against the address bar, not
+against what the backend received. Left at `/api/v1/auth`, the cookie is stored and then never sent
+back: login succeeds, and the next page load signs the user out. It presents as a token bug and is
+not one — the token code is correct and the cookie simply never arrives. `APP_PUBLIC_PATH=/kavim`
+makes the path `/kavim/api/v1/auth`, and a malformed value (`kavim`, `/kavim/`) is a startup error
+rather than a mystery at 3am.
+
+**`VITE_BASE_PATH` is a build argument, not an environment variable.** Vite writes the base into
+every asset URL when it builds, so an image built for the root cannot be re-pointed at a subpath by
+restarting it with a different env. That is why it is a Docker `ARG` wired to `APP_PUBLIC_PATH` in
+the compose file, and why moving the mount point means a rebuild.
+
+Everything derives from one value at runtime: `import.meta.env.BASE_URL` feeds `lib/basePath.ts`,
+which feeds the router's `basename`, the API base, and the health probe. Localhost keeps `/` and is
+byte-for-byte unaffected — verified by rebuilding at the root and running the full e2e suite again.
+
+### Decisions
+
+| Decision | Reasoning |
+|---|---|
+| **MinIO in the stack rather than relaxing the storage guard** | `STORAGE_BACKEND=local` is refused in production because a container filesystem is not durable — a rebuild loses every attachment. MinIO speaks S3, so Phase 6 works against it unchanged and real S3 later is a credentials change, not a data migration |
+| **Not `APP_ENV=staging` to dodge the guards** | It would also turn off `Secure` on the refresh cookie and publish `/docs`, on an internet-facing host. The guards are right; the configuration had to satisfy them |
+| **nginx strips the prefix; the app stays root-relative** | The alternative — `root_path` and prefix-aware routing throughout — puts the deployment topology into application code, where every future route has to remember it |
+| **Only the backend publishes a port, on `127.0.0.1`** | Postgres, Redis, and MinIO are reachable on the compose network and nowhere else. A database exposed to the internet is the most common way a small deployment is lost |
+| **`migrate` is a one-shot command, not part of `up`** | A container that restarts at 3am must never rewrite the schema on its own |
+| **The SPA is baked into the backend image** | One origin, one port, no CORS, no second web server (SPEC §5.5). The cost is that a frontend-only change still rebuilds the backend image |
+
+### Verification
+
+```
+ruff / format   All checks passed!
+mypy --strict   no issues in 67 source files
+import-linter   Contracts: 5 kept, 0 broken
+pytest          275 passed  (was 269)
+tsc / eslint / prettier   clean
+vitest          50 passed   (was 46)
+playwright      30 passed   — root build, unchanged
+```
+
+A subpath build really does rewrite the asset URLs:
+
+```
+VITE_BASE_PATH=/kavim/  ->  src="/kavim/assets/index-C-KXop3Y.js"
+default                 ->  src="/assets/index-DjkWXwqC.js"
+```
+
+*(Windows note: Git Bash rewrites `/kavim/` into a Windows path, so that check has to run in
+PowerShell or with `MSYS_NO_PATHCONV=1`. It cost a confusing minute; it is in `DEPLOYMENT.md`.)*
+
+### Not done — the deploy itself
+
+The server has nothing on it yet. `docs/DEPLOYMENT.md` is the runbook: clone, fill `.env`, build,
+migrate, `seed --reference`, install the nginx snippet, then verify — and the verification step
+that matters is **reloading the page after signing in**, because that is the one that proves the
+cookie path.
+
+Secrets must be generated on the server. The Gmail App Password is the one exception, since it
+already exists — and it is still the one that was pasted into a chat transcript in session 8 and
+has never been rotated (E1).
+
+### Known gaps
+
+| Gap | Consequence |
+|---|---|
+| No automated backups | `pg_dump` is documented and manual. `pgdata` holds every quality record and a 24-month audit retention requirement |
+| No CI/CD to the server | Deploys are `git pull` and a rebuild, by hand, over SSH |
+| MinIO is single-node | Survives container rebuilds, not disk loss |
+| No staging environment | A bad release is discovered in production |
+| `/health/ready` is public | Reachable through the catch-all; names which dependency is down. Restricting it is a commented block in `kavim.conf` |
+| Nothing exercises the subpath end to end | The unit tests pin the cookie path and the base joins, and the build output was inspected — but no browser has loaded the app under `/kavim` yet. The first deploy is the test |

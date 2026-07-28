@@ -11,7 +11,15 @@ import { defineConfig } from 'vitest/config';
 // in production (SPEC §5.5).
 const API_TARGET = process.env.VITE_API_PROXY_TARGET ?? 'http://localhost:8000';
 
+// The path the app is served under. `/` in development and at a host root;
+// `/kavim/` when a reverse proxy serves it under a subpath. Vite bakes this into
+// every asset URL at build time, and exposes it at runtime as
+// `import.meta.env.BASE_URL` — which the router and the HTTP client both read,
+// so the prefix is configured in exactly one place.
+const BASE_PATH = process.env.VITE_BASE_PATH ?? '/';
+
 export default defineConfig({
+  base: BASE_PATH,
   plugins: [react(), tailwindcss()],
 
   resolve: {

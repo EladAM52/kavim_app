@@ -1379,6 +1379,7 @@ Every one is declared in `core/config.py` and fails fast at startup if required 
 |---|---|---|
 | `APP_ENV` | `development` | `development` · `staging` · `production` |
 | `APP_BASE_URL` | `https://kavim.example.com` | Used to build invitation and reset links |
+| `APP_PUBLIC_PATH` | `` · `/kavim` | Path prefix the **browser** sees behind a reverse proxy. Empty at a host root. nginx strips it, so routing is unaffected; it sets the refresh cookie's `path`, which the browser matches against the address bar. A wrong value signs users out on reload |
 | `SECRET_KEY` | *(32+ random bytes)* | JWT signing. Rotating it invalidates all sessions |
 | `DATABASE_URL` | `postgresql+asyncpg://user:pw@db:5432/kavim` | |
 | `DATABASE_POOL_SIZE` | `20` | |

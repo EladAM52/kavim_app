@@ -76,8 +76,11 @@ def _set_refresh_cookie(response: Response, raw_token: str) -> None:
         # cookie would simply never be stored. Production is HTTPS-only (NFR).
         secure=settings.is_production,
         samesite="strict",
-        # Scoped so the cookie is not attached to any endpoint that does not need it.
-        path=f"{settings.API_PREFIX}/auth",
+        # Scoped so the cookie is not attached to any endpoint that does not need
+        # it. `refresh_cookie_path` includes `APP_PUBLIC_PATH`, because the browser
+        # matches this against the address bar — which carries the reverse proxy's
+        # prefix even though the backend never sees it.
+        path=settings.refresh_cookie_path,
     )
 
 
@@ -87,7 +90,9 @@ def _clear_refresh_cookie(response: Response) -> None:
         httponly=True,
         secure=settings.is_production,
         samesite="strict",
-        path=f"{settings.API_PREFIX}/auth",
+        # Must match `_set_refresh_cookie` exactly, or the browser deletes
+        # nothing and the session outlives the sign-out.
+        path=settings.refresh_cookie_path,
     )
 
 

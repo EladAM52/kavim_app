@@ -1,0 +1,175 @@
+# ══════════════════════════════════════════════════════════════════════════
+#  Kavim — production stack
+#
+#  Everything runs in containers here, unlike the development compose file:
+#  there are no bind mounts, no reload, and the frontend is baked into the
+#  backend image rather than served by Vite.
+#
+#  On the server:
+#    cd /opt/kavim
+#    cp infra/env.production.example .env      # then fill it in — see the file
+#    docker compose -f infra/docker-compose.prod.yml up -d --build
+#    docker compose -f infra/docker-compose.prod.yml run --rm migrate
+#
+#  Only the backend publishes a port, and only on the loopback interface:
+#  nginx terminates TLS and proxies to it (see infra/nginx/kavim.conf).
+#  Postgres, Redis, and MinIO are reachable on the compose network and from
+#  nowhere else — a database exposed to the internet is the single most common
+#  way a small deployment is compromised.
+# ══════════════════════════════════════════════════════════════════════════
+name: kavim-prod
+
+x-backend-base: &backend-base
+  build:
+    context: ..
+    dockerfile: backend/Dockerfile
+    target: prod
+    args:
+      # Baked into the SPA's asset URLs at build time — it cannot be changed by
+      # an environment variable afterwards. Trailing slash is what Vite wants;
+      # APP_PUBLIC_PATH in .env carries none, hence the concatenation.
+      VITE_BASE_PATH: ${APP_PUBLIC_PATH:-}/
+  image: kavim-backend:prod
+  env_file: ../.env
+  environment:
+    # In-network addresses override whatever the .env says, so the same file
+    # works for the host tooling (psql, alembic) and for the containers.
+    DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-kavim}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@db:5432/${POSTGRES_DB:-kavim}
+    REDIS_URL: redis://redis:6379/0
+    CELERY_BROKER_URL: redis://redis:6379/1
+    CELERY_RESULT_BACKEND: redis://redis:6379/2
+    STORAGE_ENDPOINT: http://minio:9000
+  depends_on:
+    db:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+    minio:
+      condition: service_healthy
+  restart: unless-stopped
+
+services:
+  # ── PostgreSQL 16 ───────────────────────────────────────────────────────
+  db:
+    image: postgres:16-alpine
+    container_name: kavim-prod-db
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-kavim}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      POSTGRES_DB: ${POSTGRES_DB:-kavim}
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-kavim} -d ${POSTGRES_DB:-kavim}"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
+    restart: unless-stopped
+
+  # ── Redis 7 ─────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: kavim-prod-redis
+    command: >
+      redis-server
+      --appendonly yes
+      --maxmemory 512mb
+      --maxmemory-policy allkeys-lru
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+    restart: unless-stopped
+
+  # ── MinIO (S3-compatible object storage) ────────────────────────────────
+  # `STORAGE_BACKEND=local` is refused in production (core/config.py) because a
+  # container filesystem is not durable — a rebuild loses every attachment.
+  # MinIO speaks the S3 API, so Phase 6 attachments work against it unchanged
+  # and moving to real S3 later is a credentials change, not a data migration.
+  minio:
+    image: minio/minio:latest
+    container_name: kavim-prod-minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${STORAGE_ACCESS_KEY:?STORAGE_ACCESS_KEY is required}
+      MINIO_ROOT_PASSWORD: ${STORAGE_SECRET_KEY:?STORAGE_SECRET_KEY is required}
+    volumes:
+      - miniodata:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    restart: unless-stopped
+
+  # Creates the bucket once, then exits. `depends_on: service_completed_
+  # successfully` is not used by the backend: the app does not touch storage
+  # until Phase 6, and a failed bucket creation must not keep the API down.
+  minio-init:
+    image: minio/mc:latest
+    container_name: kavim-prod-minio-init
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set kavim http://minio:9000 '${STORAGE_ACCESS_KEY}' '${STORAGE_SECRET_KEY}' &&
+      mc mb --ignore-existing kavim/${STORAGE_BUCKET:-kavim-attachments} &&
+      mc anonymous set none kavim/${STORAGE_BUCKET:-kavim-attachments} &&
+      echo 'bucket ready'
+      "
+    restart: "no"
+
+  # ── FastAPI ─────────────────────────────────────────────────────────────
+  backend:
+    <<: *backend-base
+    container_name: kavim-prod-backend
+    # 127.0.0.1 only. nginx is the only thing that may reach this, and binding
+    # 0.0.0.0 would publish the API past the TLS termination point.
+    ports:
+      - "127.0.0.1:${BACKEND_PORT:-8000}:8000"
+    command: >
+      uvicorn app.main:app
+      --host 0.0.0.0 --port 8000
+      --workers ${UVICORN_WORKERS:-2}
+      --proxy-headers --forwarded-allow-ips '*'
+
+  # ── Celery worker ───────────────────────────────────────────────────────
+  worker:
+    <<: *backend-base
+    container_name: kavim-prod-worker
+    command: celery -A app.workers.celery_app.celery_app worker --loglevel=info --concurrency=2
+
+  # ── Celery beat — MUST remain a single replica ──────────────────────────
+  # Two schedulers double-send every notification. The outbox sweeper runs every
+  # 30 seconds, so a duplicate beat means duplicate OTP mail against a hard
+  # ~500/day Gmail ceiling.
+  beat:
+    <<: *backend-base
+    container_name: kavim-prod-beat
+    command: celery -A app.workers.celery_app.celery_app beat --loglevel=info
+    deploy:
+      replicas: 1
+
+  # ── one-shot migration runner ───────────────────────────────────────────
+  # Deliberately not part of `up`. Migrations run when an operator runs them, so
+  # a container restart at 3am never rewrites the schema on its own:
+  #   docker compose -f infra/docker-compose.prod.yml run --rm migrate
+  migrate:
+    <<: *backend-base
+    container_name: kavim-prod-migrate
+    command: alembic upgrade head
+    restart: "no"
+    profiles: ["tools"]
+
+volumes:
+  pgdata:
+  redisdata:
+  miniodata:
